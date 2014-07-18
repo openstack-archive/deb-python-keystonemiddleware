@@ -1,5 +1,5 @@
 python-keystonemiddleware (1.0.0-1) unstable; urgency=medium
 
-  * Initial release. (Closes: #XXXXXX)
+  * Initial release. (Closes: #755135)
 
  -- Thomas Goirand <zigo@debian.org>  Tue, 08 Jul 2014 14:25:47 +0800
