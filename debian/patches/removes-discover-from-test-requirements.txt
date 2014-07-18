@@ -1,0 +1,13 @@
+Description: No python-discover in tests-requirements.
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: no
+Last-Update: 2014-07-18
+
+--- python-keystonemiddleware-1.0.0.orig/test-requirements.txt
++++ python-keystonemiddleware-1.0.0/test-requirements.txt
+@@ -1,5 +1,4 @@
+ coverage>=3.6
+-discover
+ fixtures>=0.3.14
+ hacking>=0.8.0,<0.9
+ httpretty>=0.8.0,!=0.8.1,!=0.8.2
