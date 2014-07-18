@@ -6,6 +6,8 @@ PYTHONS:=$(shell pyversions -vr)
 UPSTREAM_GIT = git://github.com/openstack/keystonemiddleware.git
 include /usr/share/openstack-pkg-tools/pkgos.make
 
+export OSLO_PACKAGE_VERSION=$(VERSION)
+
 %:
 	dh $@ --buildsystem=python_distutils --with python2,sphinxdoc
 #	dh $@ --buildsystem=python_distutils --with python2,python3,sphinxdoc
