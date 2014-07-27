@@ -1,0 +1,17 @@
+Description: Remove the intersphinx plugin.
+ Do not use the intersphinx plugin which is doing network access during
+ the build.
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: no
+Last-Update: 2014-07-28
+
+--- python-keystonemiddleware-1.0.0.orig/doc/source/conf.py
++++ python-keystonemiddleware-1.0.0/doc/source/conf.py
+@@ -42,7 +42,6 @@ sys.path.insert(0, os.path.abspath(os.pa
+ extensions = ['sphinx.ext.autodoc',
+               'sphinx.ext.todo',
+               'sphinx.ext.coverage',
+-              'sphinx.ext.intersphinx',
+               # NOTE(blk-u): Uncomment the [pbr] section in setup.cfg and
+               # remove this Sphinx extension when
+               # https://launchpad.net/bugs/1260495 is fixed.

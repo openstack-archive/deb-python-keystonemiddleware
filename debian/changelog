@@ -2,6 +2,7 @@ python-keystonemiddleware (1.0.0-2) unstable; urgency=medium
 
   * Do not attempt to run unit tests in Python 2.6, as it needs the discover
     package, which we don't want as build-depends.
+  * Removes intersphinx plugin from docs build.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 28 Jul 2014 00:29:44 +0800
 
