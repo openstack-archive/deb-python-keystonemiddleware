@@ -1,3 +1,10 @@
+python-keystonemiddleware (1.0.0-3) unstable; urgency=medium
+
+  * Added CVE-2014-7144_convert_the_conf_value_into_correct_type.patch. Thanks
+    to Luciano Bello <luciano@debian.org> for the report (Closes: #762748).
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 25 Sep 2014 07:16:29 +0000
+
 python-keystonemiddleware (1.0.0-2) unstable; urgency=medium
 
   * Do not attempt to run unit tests in Python 2.6, as it needs the discover

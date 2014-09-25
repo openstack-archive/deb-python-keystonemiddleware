@@ -1,2 +1,3 @@
 removes-discover-from-test-requirements.txt
 no-intersphinx.patch
+CVE-2014-7144_convert_the_conf_value_into_correct_type.patch
