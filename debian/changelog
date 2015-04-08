@@ -1,3 +1,10 @@
+python-keystonemiddleware (1.5.0-1) UNRELEASED; urgency=medium
+
+  * New upstream release.
+  * Fixed (build-)depends for this release.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 08 Apr 2015 10:08:46 +0200
+
 python-keystonemiddleware (1.0.0-3) unstable; urgency=medium
 
   * Added CVE-2014-7144_convert_the_conf_value_into_correct_type.patch. Thanks
