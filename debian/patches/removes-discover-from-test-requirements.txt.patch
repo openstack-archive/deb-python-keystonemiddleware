@@ -1,0 +1,15 @@
+Description: Removes discover from requirements.txt
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: no
+Last-Update: 2015-04-08
+
+--- python-keystonemiddleware-1.5.0.orig/test-requirements.txt
++++ python-keystonemiddleware-1.5.0/test-requirements.txt
+@@ -5,7 +5,6 @@
+ hacking>=0.10.0,<0.11
+ 
+ coverage>=3.6
+-discover
+ fixtures>=0.3.14
+ mock>=1.0
+ pycrypto>=2.6
