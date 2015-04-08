@@ -15,16 +15,10 @@ import sys
 import time
 
 import fixtures
-import httpretty
 import mock
-from mox3 import mox
 import requests
-import six
-from six.moves.urllib import parse as urlparse
 import testtools
 import uuid
-
-from keystonemiddleware.openstack.common import jsonutils
 
 
 class TestCase(testtools.TestCase):
@@ -43,68 +37,13 @@ class TestCase(testtools.TestCase):
 
     def setUp(self):
         super(TestCase, self).setUp()
-        self.mox = mox.Mox()
         self.logger = self.useFixture(fixtures.FakeLogger(level=logging.DEBUG))
         self.time_patcher = mock.patch.object(time, 'time', lambda: 1234)
         self.time_patcher.start()
 
     def tearDown(self):
         self.time_patcher.stop()
-        self.mox.UnsetStubs()
-        self.mox.VerifyAll()
         super(TestCase, self).tearDown()
-
-    def stub_url(self, method, parts=None, base_url=None, json=None, **kwargs):
-        if not base_url:
-            base_url = self.TEST_URL
-
-        if json:
-            kwargs['body'] = jsonutils.dumps(json)
-            kwargs['content_type'] = 'application/json'
-
-        if parts:
-            url = '/'.join([p.strip('/') for p in [base_url] + parts])
-        else:
-            url = base_url
-
-        # For urls containing queries
-        url = url.replace("/?", "?")
-        httpretty.register_uri(method, url, **kwargs)
-
-    def assertRequestBodyIs(self, body=None, json=None):
-        last_request_body = httpretty.last_request().body
-        if six.PY3:
-            last_request_body = last_request_body.decode('utf-8')
-
-        if json:
-            val = jsonutils.loads(last_request_body)
-            self.assertEqual(json, val)
-        elif body:
-            self.assertEqual(body, last_request_body)
-
-    def assertQueryStringIs(self, qs=''):
-        """Verify the QueryString matches what is expected.
-
-        The qs parameter should be of the format \'foo=bar&abc=xyz\'
-        """
-        expected = urlparse.parse_qs(qs)
-        self.assertEqual(expected, httpretty.last_request().querystring)
-
-    def assertQueryStringContains(self, **kwargs):
-        qs = httpretty.last_request().querystring
-
-        for k, v in six.iteritems(kwargs):
-            self.assertIn(k, qs)
-            self.assertIn(v, qs[k])
-
-    def assertRequestHeaderEqual(self, name, val):
-        """Verify that the last request made contains a header and its value
-
-        The request must have already been made and httpretty must have been
-        activated for the request.
-        """
-        headers = httpretty.last_request().headers
-        self.assertEqual(headers.get(name), val)
 
 
 if tuple(sys.version_info)[0:2] < (2, 7):

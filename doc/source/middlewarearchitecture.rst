@@ -111,7 +111,9 @@ Configuration
 -------------
 
 The middleware is configured within the config file of the main application as
-a WSGI component. Example for the auth_token middleware::
+a WSGI component. Example for the auth_token middleware:
+
+.. code-block:: ini
 
     [app:myService]
     paste.app_factory = myService:app_factory
@@ -243,15 +245,18 @@ a WSGI component. Example for the auth_token middleware::
 For services which have a separate paste-deploy ini file, auth_token middleware
 can be alternatively configured in [keystone_authtoken] section in the main
 config file. For example in Nova, all middleware parameters can be removed
-from api-paste.ini::
+from ``api-paste.ini``:
+
+.. code-block:: ini
 
     [filter:authtoken]
     paste.filter_factory = keystonemiddleware.auth_token:filter_factory
 
-and set in nova.conf::
+and set in ``nova.conf``:
+
+.. code-block:: ini
 
     [DEFAULT]
-    ...
     auth_strategy=keystone
 
     [keystone_authtoken]
@@ -360,6 +365,18 @@ provide the ``cache`` option.
 * ``cache``: (optional) if defined, the environment key where the Swift
   MemcacheRing object is stored.
 
+Memcached dependencies
+======================
+
+In order to use `memcached`_ it is necessary to install the `python-memcached`_
+library. If data stored in `memcached`_ will need to be encrypted it is also
+necessary to install the `pycrypto`_ library. These libs are not listed in
+the requirements.txt file.
+
+.. _`memcached`: http://memcached.org/
+.. _`python-memcached`: https://pypi.python.org/pypi/python-memcached
+.. _`pycrypto`: https://pypi.python.org/pypi/pycrypto
+
 Memcached and System Time
 =========================
 
@@ -368,8 +385,6 @@ time of memcached hosts is set to UTC. Memcached uses the host's system
 time in determining whether a key has expired, whereas Keystone sets
 key expiry in UTC.  The timezone used by Keystone and memcached must
 match if key expiry is to behave as expected.
-
-.. _`memcached`: http://memcached.org/
 
 Memcache Protection
 ===================
@@ -410,6 +425,22 @@ The authentication middleware extends the HTTP request with the header
 is set to `Confirmed`. If the middleware is delegating the auth decision to the
 service, then the status is set to `Invalid` if the auth request was
 unsuccessful.
+
+An ``X-Service-Token`` header may also be included with a request. If present,
+and the value of ``X-Auth-Token`` or ``X-Storage-Token`` has not caused the
+request to be denied, then the middleware will attempt to validate the value of
+``X-Service-Token``. If valid, the authentication middleware extends the HTTP
+request with the header ``X-Service-Identity-Status`` having value `Confirmed`
+and also extends the request with additional headers representing the identity
+authenticated and authorised by the token.
+
+If ``X-Service-Token`` is present and its value is invalid and the
+``delay_auth_decision`` option is True then the value of
+``X-Service-Identity-Status`` is set to `Invalid` and no further headers are
+added. Otherwise if ``X-Service-Token`` is present and its value is invalid
+then the middleware will respond to the HTTP request with HTTPUnauthorized,
+regardless of the validity of the ``X-Auth-Token`` or ``X-Storage-Token``
+values.
 
 Extended the request with additional User Information
 -----------------------------------------------------

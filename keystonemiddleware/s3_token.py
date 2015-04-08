@@ -20,25 +20,26 @@
 # See them for their copyright.
 
 """
-S3 TOKEN MIDDLEWARE
+S3 Token Middleware
 
 This WSGI component:
 
-* Get a request from the swift3 middleware with an S3 Authorization
+* Gets a request from the swift3 middleware with an S3 Authorization
   access key.
-* Validate s3 token in Keystone.
-* Transform the account name to AUTH_%(tenant_name).
+* Validates s3 token in Keystone.
+* Transforms the account name to AUTH_%(tenant_name).
 
 """
 
 import logging
 import webob
 
+from oslo_serialization import jsonutils
 import requests
 import six
 from six.moves import urllib
 
-from keystonemiddleware.openstack.common import jsonutils
+from keystonemiddleware.i18n import _, _LI
 
 
 PROTOCOL_NAME = 'S3 Token Authentication'
@@ -68,7 +69,8 @@ def _split_path(path, minsegs=1, maxsegs=None, rest_with_last=False):
     if not maxsegs:
         maxsegs = minsegs
     if minsegs > maxsegs:
-        raise ValueError('minsegs > maxsegs: %d > %d' % (minsegs, maxsegs))
+        raise ValueError(_('minsegs > maxsegs: %(min)d > %(max)d)') %
+                         {'min': minsegs, 'max': maxsegs})
     if rest_with_last:
         segs = path.split('/', maxsegs)
         minsegs += 1
@@ -76,7 +78,7 @@ def _split_path(path, minsegs=1, maxsegs=None, rest_with_last=False):
         count = len(segs)
         if (segs[0] or count < minsegs or count > maxsegs or
                 '' in segs[1:minsegs]):
-            raise ValueError('Invalid path: %s' % urllib.parse.quote(path))
+            raise ValueError(_('Invalid path: %s') % urllib.parse.quote(path))
     else:
         minsegs += 1
         maxsegs += 1
@@ -85,7 +87,7 @@ def _split_path(path, minsegs=1, maxsegs=None, rest_with_last=False):
         if (segs[0] or count < minsegs or count > maxsegs + 1 or
                 '' in segs[1:minsegs] or
                 (count == maxsegs + 1 and segs[maxsegs])):
-            raise ValueError('Invalid path: %s' % urllib.parse.quote(path))
+            raise ValueError(_('Invalid path: %s') % urllib.parse.quote(path))
     segs = segs[1:maxsegs]
     segs.extend([None] * (maxsegs - 1 - len(segs)))
     return segs
@@ -96,7 +98,7 @@ class ServiceError(Exception):
 
 
 class S3Token(object):
-    """Auth Middleware that handles S3 authenticating client calls."""
+    """Middleware that handles S3 authentication."""
 
     def __init__(self, app, conf):
         """Common initialization code."""
@@ -150,7 +152,7 @@ class S3Token(object):
                                      headers=headers, data=creds_json,
                                      verify=self._verify)
         except requests.exceptions.RequestException as e:
-            self._logger.info('HTTP connection exception: %s', e)
+            self._logger.info(_LI('HTTP connection exception: %s'), e)
             resp = self._deny_request('InvalidURI')
             raise ServiceError(resp)
 

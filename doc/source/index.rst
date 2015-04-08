@@ -1,9 +1,10 @@
 Python Middleware for OpenStack Identity API (Keystone)
 =======================================================
 
-This is the middleware provided for integrating with the OpenStack 
+This is the middleware provided for integrating with the OpenStack
 Identity API and handling authorization enforcement based upon the
-data within the OpenStack Identity tokens.
+data within the OpenStack Identity tokens. Also included is middleware that
+provides the ability to create audit events based on API requests.
 
 Contents:
 
@@ -11,6 +12,7 @@ Contents:
    :maxdepth: 1
 
    middlewarearchitecture
+   audit
 
 Contributing
 ============
@@ -21,7 +23,7 @@ using `Gerrit`_.
 
 .. _on GitHub: https://github.com/openstack/keystonemiddleware
 .. _Launchpad: https://launchpad.net/keystonemiddleware
-.. _Gerrit: http://wiki.openstack.org/GerritWorkflow
+.. _Gerrit: http://docs.openstack.org/infra/manual/developers.html#development-workflow
 
 Run tests with ``python setup.py test``.
 

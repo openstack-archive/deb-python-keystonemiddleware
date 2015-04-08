@@ -19,17 +19,20 @@ __all__ = [
 import copy
 
 import keystonemiddleware.auth_token
-
+from keystonemiddleware.auth_token import _auth
+from keystonemiddleware.auth_token import _base
 
 auth_token_opts = [
-    ('keystone_authtoken', keystonemiddleware.auth_token._OPTS)
+    (_base.AUTHTOKEN_GROUP,
+     keystonemiddleware.auth_token._OPTS +
+     _auth.AuthTokenPlugin.get_options())
 ]
 
 
 def list_auth_token_opts():
-    """Return a list of oslo.config options available in auth_token middleware.
+    """Return a list of oslo_config options available in auth_token middleware.
 
-    The returned list includes all oslo.config options which may be registered
+    The returned list includes all oslo_config options which may be registered
     at runtime by the project.
 
     Each element of the list is a tuple. The first element is the name of the
