@@ -1,2 +1,3 @@
 no-intersphinx.patch
 removes-discover-from-test-requirements.txt.patch
+CVE-2015-1852_Fix-s3_token-middleware-parsing-insecure-option.patch
