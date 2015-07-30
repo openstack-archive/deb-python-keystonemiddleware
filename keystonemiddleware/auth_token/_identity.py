@@ -10,31 +10,57 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import functools
+
 from keystoneclient import auth
 from keystoneclient import discover
 from keystoneclient import exceptions
-from oslo_serialization import jsonutils
+from keystoneclient.v2_0 import client as v2_client
+from keystoneclient.v3 import client as v3_client
 from six.moves import urllib
 
 from keystonemiddleware.auth_token import _auth
 from keystonemiddleware.auth_token import _exceptions as exc
-from keystonemiddleware.auth_token import _utils
 from keystonemiddleware.i18n import _, _LE, _LI, _LW
+
+
+def _convert_fetch_cert_exception(fetch_cert):
+    @functools.wraps(fetch_cert)
+    def wrapper(self):
+        try:
+            text = fetch_cert(self)
+        except exceptions.HTTPError as e:
+            raise exceptions.CertificateConfigError(e.details)
+        return text
+
+    return wrapper
 
 
 class _RequestStrategy(object):
 
     AUTH_VERSION = None
 
-    def __init__(self, json_request, adap, include_service_catalog=None):
-        self._json_request = json_request
-        self._adapter = adap
+    def __init__(self, adap, include_service_catalog=None):
         self._include_service_catalog = include_service_catalog
 
     def verify_token(self, user_token):
         pass
 
-    def fetch_cert_file(self, cert_type):
+    @_convert_fetch_cert_exception
+    def fetch_signing_cert(self):
+        return self._fetch_signing_cert()
+
+    def _fetch_signing_cert(self):
+        pass
+
+    @_convert_fetch_cert_exception
+    def fetch_ca_cert(self):
+        return self._fetch_ca_cert()
+
+    def _fetch_ca_cert(self):
+        pass
+
+    def fetch_revocation_list(self):
         pass
 
 
@@ -42,36 +68,42 @@ class _V2RequestStrategy(_RequestStrategy):
 
     AUTH_VERSION = (2, 0)
 
-    def verify_token(self, user_token):
-        return self._json_request('GET',
-                                  '/tokens/%s' % user_token,
-                                  authenticated=True)
+    def __init__(self, adap, **kwargs):
+        super(_V2RequestStrategy, self).__init__(adap, **kwargs)
+        self._client = v2_client.Client(session=adap)
 
-    def fetch_cert_file(self, cert_type):
-        return self._adapter.get('/certificates/%s' % cert_type,
-                                 authenticated=False)
+        self.verify_token = self._client.tokens.validate_access_info
+
+    def _fetch_signing_cert(self):
+        return self._client.certificates.get_signing_certificate()
+
+    def _fetch_ca_cert(self):
+        return self._client.certificates.get_ca_certificate()
+
+    def fetch_revocation_list(self):
+        return self._client.tokens.get_revoked()
 
 
 class _V3RequestStrategy(_RequestStrategy):
 
     AUTH_VERSION = (3, 0)
 
-    def verify_token(self, user_token):
-        path = '/auth/tokens'
-        if not self._include_service_catalog:
-            path += '?nocatalog'
+    def __init__(self, adap, **kwargs):
+        super(_V3RequestStrategy, self).__init__(adap, **kwargs)
+        self._client = v3_client.Client(session=adap)
 
-        return self._json_request('GET',
-                                  path,
-                                  authenticated=True,
-                                  headers={'X-Subject-Token': user_token})
+        self.verify_token = functools.partial(
+            self._client.tokens.validate,
+            include_catalog=self._include_service_catalog)
 
-    def fetch_cert_file(self, cert_type):
-        if cert_type == 'signing':
-            cert_type = 'certificates'
+    def _fetch_signing_cert(self):
+        return self._client.simple_cert.get_certificates()
 
-        return self._adapter.get('/OS-SIMPLE-CERT/%s' % cert_type,
-                                 authenticated=False)
+    def _fetch_ca_cert(self):
+        return self._client.simple_cert.get_ca_certificates()
+
+    def fetch_revocation_list(self):
+        return self._client.tokens.get_revoked()
 
 
 _REQUEST_STRATEGIES = [_V3RequestStrategy, _V2RequestStrategy]
@@ -120,7 +152,6 @@ class IdentityServer(object):
             self._adapter.version = strategy_class.AUTH_VERSION
 
             self._request_strategy_obj = strategy_class(
-                self._json_request,
                 self._adapter,
                 include_service_catalog=self._include_service_catalog)
 
@@ -158,15 +189,14 @@ class IdentityServer(object):
         :param retry: flag that forces the middleware to retry
                       user authentication when an indeterminate
                       response is received. Optional.
-        :returns: token object received from identity server on success
+        :returns: access info received from identity server on success
+        :rtype: :py:class:`keystoneclient.access.AccessInfo`
         :raises exc.InvalidToken: if token is rejected
         :raises exc.ServiceError: if unable to authenticate token
 
         """
-        user_token = _utils.safe_quote(user_token)
-
         try:
-            response, data = self._request_strategy.verify_token(user_token)
+            auth_ref = self._request_strategy.verify_token(user_token)
         except exceptions.NotFound as e:
             self._LOG.warn(_LW('Authorization failed for token'))
             self._LOG.warn(_LW('Identity response: %s'), e.response.text)
@@ -182,62 +212,21 @@ class IdentityServer(object):
                 e.http_status)
             self._LOG.warn(_LW('Identity response: %s'), e.response.text)
         else:
-            if response.status_code == 200:
-                return data
-
-            raise exc.InvalidToken()
+            return auth_ref
 
     def fetch_revocation_list(self):
         try:
-            response, data = self._json_request(
-                'GET', '/tokens/revoked',
-                authenticated=True,
-                endpoint_filter={'version': (2, 0)})
+            data = self._request_strategy.fetch_revocation_list()
         except exceptions.HTTPError as e:
             msg = _('Failed to fetch token revocation list: %d')
             raise exc.RevocationListError(msg % e.http_status)
-        if response.status_code != 200:
-            msg = _('Unable to fetch token revocation list.')
-            raise exc.RevocationListError(msg)
         if 'signed' not in data:
             msg = _('Revocation list improperly formatted.')
             raise exc.RevocationListError(msg)
         return data['signed']
 
     def fetch_signing_cert(self):
-        return self._fetch_cert_file('signing')
+        return self._request_strategy.fetch_signing_cert()
 
     def fetch_ca_cert(self):
-        return self._fetch_cert_file('ca')
-
-    def _json_request(self, method, path, **kwargs):
-        """HTTP request helper used to make json requests.
-
-        :param method: http method
-        :param path: relative request url
-        :param **kwargs: additional parameters used by session or endpoint
-        :returns: http response object, response body parsed as json
-        :raises ServerError: when unable to communicate with identity server.
-
-        """
-        headers = kwargs.setdefault('headers', {})
-        headers['Accept'] = 'application/json'
-
-        response = self._adapter.request(path, method, **kwargs)
-
-        try:
-            data = jsonutils.loads(response.text)
-        except ValueError:
-            self._LOG.debug('Identity server did not return json-encoded body')
-            data = {}
-
-        return response, data
-
-    def _fetch_cert_file(self, cert_type):
-        try:
-            response = self._request_strategy.fetch_cert_file(cert_type)
-        except exceptions.HTTPError as e:
-            raise exceptions.CertificateConfigError(e.details)
-        if response.status_code != 200:
-            raise exceptions.CertificateConfigError(response.text)
-        return response.text
+        return self._request_strategy.fetch_ca_cert()

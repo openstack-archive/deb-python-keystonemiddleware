@@ -30,7 +30,7 @@ import sys
 from oslo_config import cfg
 from oslo_context import context
 try:
-    import oslo.messaging
+    import oslo_messaging
     messaging = True
 except ImportError:
     messaging = False
@@ -46,6 +46,7 @@ from pycadf import reporterstep
 from pycadf import resource
 from pycadf import tag
 from pycadf import timestamp
+import six
 from six.moves import configparser
 from six.moves.urllib import parse as urlparse
 import webob.dec
@@ -79,6 +80,16 @@ AuditMap = collections.namedtuple('AuditMap',
                                    'default_target_endpoint_type'])
 
 
+# NOTE(blk-u): Compatibility for Python 2. SafeConfigParser and
+# SafeConfigParser.readfp are deprecated in Python 3. Remove this when we drop
+# support for Python 2.
+if six.PY2:
+    class ConfigParser(configparser.SafeConfigParser):
+        read_file = configparser.SafeConfigParser.readfp
+else:
+    ConfigParser = configparser.ConfigParser
+
+
 class OpenStackAuditApi(object):
 
     def __init__(self, cfg_file):
@@ -90,8 +101,8 @@ class OpenStackAuditApi(object):
 
         if cfg_file:
             try:
-                map_conf = configparser.SafeConfigParser()
-                map_conf.readfp(open(cfg_file))
+                map_conf = ConfigParser()
+                map_conf.read_file(open(cfg_file))
 
                 try:
                     default_target_endpoint_type = map_conf.get(
@@ -190,13 +201,13 @@ class OpenStackAuditApi(object):
                                                            endp['name'])),
             admin_endp=endpoint.Endpoint(
                 name='admin',
-                url=endp['endpoints'][0]['adminURL']),
+                url=endp['endpoints'][0].get('adminURL', taxonomy.UNKNOWN)),
             private_endp=endpoint.Endpoint(
                 name='private',
-                url=endp['endpoints'][0]['internalURL']),
+                url=endp['endpoints'][0].get('internalURL', taxonomy.UNKNOWN)),
             public_endp=endpoint.Endpoint(
                 name='public',
-                url=endp['endpoints'][0]['publicURL']))
+                url=endp['endpoints'][0].get('publicURL', taxonomy.UNKNOWN)))
 
         return service
 
@@ -251,10 +262,11 @@ class OpenStackAuditApi(object):
 
         default_endpoint = None
         for endp in catalog:
+            endpoint_urls = endp['endpoints'][0]
             admin_urlparse = urlparse.urlparse(
-                endp['endpoints'][0]['adminURL'])
+                endpoint_urls.get('adminURL', ''))
             public_urlparse = urlparse.urlparse(
-                endp['endpoints'][0]['publicURL'])
+                endpoint_urls.get('publicURL', ''))
             req_url = urlparse.urlparse(req.host_url)
             if (req_url.netloc == admin_urlparse.netloc
                     or req_url.netloc == public_urlparse.netloc):
@@ -322,8 +334,8 @@ class AuditMiddleware(object):
 
         transport_aliases = self._get_aliases(cfg.CONF.project)
         if messaging:
-            self._notifier = oslo.messaging.Notifier(
-                oslo.messaging.get_transport(cfg.CONF,
+            self._notifier = oslo_messaging.Notifier(
+                oslo_messaging.get_transport(cfg.CONF,
                                              aliases=transport_aliases),
                 os.path.basename(sys.argv[0]))
 

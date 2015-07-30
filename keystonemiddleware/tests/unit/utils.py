@@ -13,15 +13,27 @@
 import logging
 import sys
 import time
+import warnings
 
 import fixtures
 import mock
+import oslotest.base as oslotest
 import requests
-import testtools
 import uuid
 
 
-class TestCase(testtools.TestCase):
+class BaseTestCase(oslotest.BaseTestCase):
+    def setUp(self):
+        super(BaseTestCase, self).setUp()
+
+        # If keystonemiddleware calls any deprecated function this will raise
+        # an exception.
+        warnings.filterwarnings('error', category=DeprecationWarning,
+                                module='^keystonemiddleware\\.')
+        self.addCleanup(warnings.resetwarnings)
+
+
+class TestCase(BaseTestCase):
     TEST_DOMAIN_ID = '1'
     TEST_DOMAIN_NAME = 'aDomain'
     TEST_GROUP_ID = uuid.uuid4().hex
@@ -108,7 +120,7 @@ class DisableModuleFixture(fixtures.Fixture):
 
     def clear_module(self):
         cleared_modules = {}
-        for fullname in sys.modules.keys():
+        for fullname in list(sys.modules.keys()):
             if (fullname == self.module or
                     fullname.startswith(self.module + '.')):
                 cleared_modules[fullname] = sys.modules.pop(fullname)

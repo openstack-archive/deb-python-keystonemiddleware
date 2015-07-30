@@ -11,16 +11,31 @@
 # under the License.
 
 import contextlib
+import hashlib
 
-from keystoneclient.common import cms
 from oslo_serialization import jsonutils
-from oslo_utils import timeutils
 import six
 
 from keystonemiddleware.auth_token import _exceptions as exc
 from keystonemiddleware.auth_token import _memcache_crypt as memcache_crypt
 from keystonemiddleware.i18n import _, _LE
 from keystonemiddleware.openstack.common import memorycache
+
+
+def _hash_key(key):
+    """Turn a set of arguments into a SHA256 hash.
+
+    Using a known-length cache key is important to ensure that memcache
+    maximum key length is not exceeded causing failures to validate.
+    """
+    if isinstance(key, six.text_type):
+        # NOTE(morganfainberg): Ensure we are always working with a bytes
+        # type required for the hasher. In python 2.7 it is possible to
+        # get a text_type (unicode). In python 3.4 all strings are
+        # text_type and not bytes by default. This encode coerces the
+        # text_type to the appropriate bytes values.
+        key = key.encode('utf-8')
+    return hashlib.sha256(key).hexdigest()
 
 
 class _CachePool(list):
@@ -57,9 +72,9 @@ class _MemcacheClientPool(object):
                  memcache_pool_conn_get_timeout=None,
                  memcache_pool_socket_timeout=None):
         # NOTE(morganfainberg): import here to avoid hard dependency on
-        # python-memcache library.
+        # python-memcached library.
         global _memcache_pool
-        from keystonemiddleware import _memcache_pool
+        from keystonemiddleware.auth_token import _memcache_pool
 
         self._pool = _memcache_pool.MemcacheClientPool(
             memcache_servers,
@@ -97,7 +112,7 @@ class TokenCache(object):
     _CACHE_KEY_TEMPLATE = 'tokens/%s'
     _INVALID_INDICATOR = 'invalid'
 
-    def __init__(self, log, cache_time=None, hash_algorithms=None,
+    def __init__(self, log, cache_time=None,
                  env_cache_name=None, memcached_servers=None,
                  use_advanced_pool=False, memcache_pool_dead_retry=None,
                  memcache_pool_maxsize=None, memcache_pool_unused_timeout=None,
@@ -105,7 +120,6 @@ class TokenCache(object):
                  memcache_pool_socket_timeout=None):
         self._LOG = log
         self._cache_time = cache_time
-        self._hash_algorithms = hash_algorithms
         self._env_cache_name = env_cache_name
         self._memcached_servers = memcached_servers
         self._use_advanced_pool = use_advanced_pool
@@ -150,47 +164,11 @@ class TokenCache(object):
 
         self._initialized = True
 
-    def get(self, user_token):
-        """Check if the token is cached already.
-
-        Returns a tuple. The first element is a list of token IDs, where the
-        first one is the preferred hash.
-
-        The second element is the token data from the cache if the token was
-        cached, otherwise ``None``.
-
-        :raises exc.InvalidToken: if the token is invalid
-
-        """
-
-        if cms.is_asn1_token(user_token) or cms.is_pkiz(user_token):
-            # user_token is a PKI token that's not hashed.
-
-            token_hashes = list(cms.cms_hash_token(user_token, mode=algo)
-                                for algo in self._hash_algorithms)
-
-            for token_hash in token_hashes:
-                cached = self._cache_get(token_hash)
-                if cached:
-                    return (token_hashes, cached)
-
-            # The token wasn't found using any hash algorithm.
-            return (token_hashes, None)
-
-        # user_token is either a UUID token or a hashed PKI token.
-        token_id = user_token
-        cached = self._cache_get(token_id)
-        return ([token_id], cached)
-
-    def store(self, token_id, data, expires):
+    def store(self, token_id, data):
         """Put token data into the cache.
-
-        Stores the parsed expire date in cache allowing
-        quick check of token freshness on retrieval.
-
         """
         self._LOG.debug('Storing token in cache')
-        self._cache_store(token_id, (data, expires))
+        self._cache_store(token_id, data)
 
     def store_invalid(self, token_id):
         """Store invalid token in cache."""
@@ -217,7 +195,7 @@ class TokenCache(object):
         # NOTE(jamielennox): in the basic implementation there is no need for
         # a context so just pass None as it will only get passed back later.
         unused_context = None
-        return self._CACHE_KEY_TEMPLATE % token_id, unused_context
+        return self._CACHE_KEY_TEMPLATE % _hash_key(token_id), unused_context
 
     def _deserialize(self, data, context):
         """Deserialize data from the cache back into python objects.
@@ -249,7 +227,7 @@ class TokenCache(object):
         # memory cache will handle serialization for us
         return data
 
-    def _cache_get(self, token_id):
+    def get(self, token_id):
         """Return token information from cache.
 
         If token is invalid raise exc.InvalidToken
@@ -268,6 +246,8 @@ class TokenCache(object):
         if serialized is None:
             return None
 
+        if isinstance(serialized, six.text_type):
+            serialized = serialized.encode('utf8')
         data = self._deserialize(serialized, context)
 
         # Note that _INVALID_INDICATOR and (data, expires) are the only
@@ -280,24 +260,15 @@ class TokenCache(object):
             self._LOG.debug('Cached Token is marked unauthorized')
             raise exc.InvalidToken(_('Token authorization failed'))
 
-        data, expires = cached
-
+        # NOTE(jamielennox): Cached values used to be stored as a tuple of data
+        # and expiry time. They no longer are but we have to allow some time to
+        # transition the old format so if it's a tuple just return the data.
         try:
-            expires = timeutils.parse_isotime(expires)
+            data, expires = cached
         except ValueError:
-            # Gracefully handle upgrade of expiration times from *nix
-            # timestamps to ISO 8601 formatted dates by ignoring old cached
-            # values.
-            return
+            data = cached
 
-        expires = timeutils.normalize_time(expires)
-        utcnow = timeutils.utcnow()
-        if utcnow < expires:
-            self._LOG.debug('Returning cached token')
-            return data
-        else:
-            self._LOG.debug('Cached Token seems expired')
-            raise exc.InvalidToken(_('Token authorization failed'))
+        return data
 
     def _cache_store(self, token_id, data):
         """Store value into memcache.

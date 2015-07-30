@@ -30,6 +30,14 @@ class AuthTokenPlugin(auth.BaseAuthPlugin):
     def __init__(self, auth_host, auth_port, auth_protocol, auth_admin_prefix,
                  admin_user, admin_password, admin_tenant_name, admin_token,
                  identity_uri, log):
+
+        log.warning(_LW(
+            "Use of the auth_admin_prefix, auth_host, auth_port, "
+            "auth_protocol, identity_uri, admin_token, admin_user, "
+            "admin_password, and admin_tenant_name configuration options is "
+            "deprecated in favor of auth_plugin and related options and may "
+            "be removed in a future release."))
+
         # NOTE(jamielennox): it does appear here that our default arguments
         # are backwards. We need to do it this way so that we can handle the
         # same deprecation strategy for CONF and the conf variable.
@@ -88,7 +96,8 @@ class AuthTokenPlugin(auth.BaseAuthPlugin):
 
         :param session: The session object that the auth_plugin belongs to.
         :type session: keystoneclient.session.Session
-        :param tuple version: The version number required for this endpoint.
+        :param version: The version number required for this endpoint.
+        :type version: tuple or str
         :param str interface: what visibility the endpoint should have.
 
         :returns: The base URL that will be used to talk to the required
@@ -115,9 +124,13 @@ class AuthTokenPlugin(auth.BaseAuthPlugin):
 
         # NOTE(jamielennox): for backwards compatibility here we don't
         # actually use the URL from discovery we hack it up instead. :(
-        if version[0] == 2:
+        # NOTE(blk-u): Normalizing the version is a workaround for bug 1450272.
+        # This can be removed once that's fixed. Also fix the docstring for the
+        # version parameter to be just "tuple".
+        version = discover.normalize_version_number(version)
+        if discover.version_match((2, 0), version):
             return '%s/v2.0' % self._identity_uri
-        elif version[0] == 3:
+        elif discover.version_match((3, 0), version):
             return '%s/v3' % self._identity_uri
 
         # NOTE(jamielennox): This plugin will only get called from auth_token
