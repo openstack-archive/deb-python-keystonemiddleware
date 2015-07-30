@@ -1,3 +1,10 @@
+python-keystonemiddleware (2.1.0-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Fixed (build-)depends for this release.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 30 Jul 2015 07:38:14 +0000
+
 python-keystonemiddleware (1.5.0-2) unstable; urgency=high
 
   * CVE-2015-1852: S3Token TLS cert verification option not honored. Applied
