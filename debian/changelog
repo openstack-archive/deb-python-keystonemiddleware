@@ -2,6 +2,7 @@ python-keystonemiddleware (2.1.0-1) experimental; urgency=medium
 
   * New upstream release.
   * Fixed (build-)depends for this release.
+  * Fixed watch file.
 
  -- Thomas Goirand <zigo@debian.org>  Thu, 30 Jul 2015 07:38:14 +0000
 
