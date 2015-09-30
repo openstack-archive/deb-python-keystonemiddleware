@@ -2,6 +2,7 @@ python-keystonemiddleware (2.3.0-1) UNRELEASED; urgency=medium
 
   * New upstream release.
   * Align dependencies with upstream.
+  * d/control: Update uploaders.
 
  -- Corey Bryant <corey.bryant@canonical.com>  Wed, 30 Sep 2015 14:42:41 -0400
 
