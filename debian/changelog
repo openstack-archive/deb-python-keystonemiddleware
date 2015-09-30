@@ -1,3 +1,9 @@
+python-keystonemiddleware (2.3.0-1) UNRELEASED; urgency=medium
+
+  * New upstream release.
+
+ -- Corey Bryant <corey.bryant@canonical.com>  Wed, 30 Sep 2015 14:42:41 -0400
+
 python-keystonemiddleware (2.1.0-2) experimental; urgency=medium
 
   * Removed python-bandit build-depends.
