@@ -1,4 +1,4 @@
-an#!/usr/bin/make -f
+#!/usr/bin/make -f
 
 PYTHONS:=$(shell pyversions -vr)
 PYTHON3S:=$(shell py3versions -vr)
