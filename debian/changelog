@@ -1,3 +1,9 @@
+python-keystonemiddleware (2.3.0-3) unstable; urgency=medium
+
+  * Uploading to unstable.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 16 Oct 2015 10:04:17 +0000
+
 python-keystonemiddleware (2.3.0-2) experimental; urgency=medium
 
   * Added Python 3 support.
