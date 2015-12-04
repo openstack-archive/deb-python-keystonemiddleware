@@ -1,6 +1,7 @@
 python-keystonemiddleware (3.0.0-1) experimental; urgency=medium
 
   * New upstream release.
+  * Fixed (build-)depends for this release.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 04 Dec 2015 11:02:00 +0100
 
