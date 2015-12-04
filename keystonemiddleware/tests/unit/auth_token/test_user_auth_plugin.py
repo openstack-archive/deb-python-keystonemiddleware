@@ -27,17 +27,16 @@ class BaseUserPluginTests(object):
 
     def configure_middleware(self,
                              auth_plugin,
-                             group='keystone_authtoken',
                              **kwargs):
         opts = auth.get_plugin_class(auth_plugin).get_options()
-        self.cfg.register_opts(opts, group=group)
+        self.cfg.register_opts(opts, group=_base.AUTHTOKEN_GROUP)
 
         # Since these tests cfg.config() themselves rather than waiting for
         # auth_token to do it on __init__ we need to register the base auth
         # options (e.g., auth_plugin)
         auth.register_conf_options(self.cfg.conf, group=_base.AUTHTOKEN_GROUP)
 
-        self.cfg.config(group=group,
+        self.cfg.config(group=_base.AUTHTOKEN_GROUP,
                         auth_plugin=auth_plugin,
                         **kwargs)
 
@@ -60,7 +59,6 @@ class BaseUserPluginTests(object):
         m = self.create_simple_middleware()
 
         resp = self.call(m, headers=headers)
-        self.assertEqual(200, resp.status_int)
         return resp.request.environ['keystone.token_auth']
 
     def test_user_information(self):
