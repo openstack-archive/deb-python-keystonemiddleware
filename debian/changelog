@@ -1,3 +1,9 @@
+python-keystonemiddleware (3.0.0-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 04 Dec 2015 11:02:00 +0100
+
 python-keystonemiddleware (2.3.0-3) unstable; urgency=medium
 
   * Uploading to unstable.
