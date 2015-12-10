@@ -1,3 +1,9 @@
+python-keystonemiddleware (4.0.0-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 10 Dec 2015 16:29:42 +0100
+
 python-keystonemiddleware (3.0.0-1) experimental; urgency=medium
 
   * New upstream release.
