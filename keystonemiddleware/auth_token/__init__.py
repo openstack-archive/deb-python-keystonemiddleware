@@ -169,8 +169,8 @@ keystone.token_info
     well as basic information about the project and user.
 
 keystone.token_auth
-    A keystoneclient auth plugin that may be used with a
-    :py:class:`keystoneclient.session.Session`. This plugin will load the
+    A keystoneauth1 auth plugin that may be used with a
+    :py:class:`keystoneauth1.session.Session`. This plugin will load the
     authentication data provided to auth_token middleware.
 
 
@@ -210,13 +210,14 @@ import binascii
 import datetime
 import logging
 
-from keystoneclient import access
-from keystoneclient import adapter
-from keystoneclient import auth
+from keystoneauth1 import access
+from keystoneauth1 import adapter
+from keystoneauth1 import discover
+from keystoneauth1 import exceptions as ksa_exceptions
+from keystoneauth1 import loading
+from keystoneauth1.loading import session as session_loading
 from keystoneclient.common import cms
-from keystoneclient import discover
-from keystoneclient import exceptions
-from keystoneclient import session
+from keystoneclient import exceptions as ksc_exceptions
 from oslo_config import cfg
 from oslo_serialization import jsonutils
 import pkg_resources
@@ -226,7 +227,7 @@ import webob.dec
 from keystonemiddleware.auth_token import _auth
 from keystonemiddleware.auth_token import _base
 from keystonemiddleware.auth_token import _cache
-from keystonemiddleware.auth_token import _exceptions as exc
+from keystonemiddleware.auth_token import _exceptions as ksm_exceptions
 from keystonemiddleware.auth_token import _identity
 from keystonemiddleware.auth_token import _request
 from keystonemiddleware.auth_token import _revocations
@@ -368,7 +369,7 @@ _OPTS = [
                 ' only while migrating from a less secure algorithm to a more'
                 ' secure one. Once all the old tokens are expired this option'
                 ' should be set to a single value for better performance.'),
-]
+] + _auth.OPTS
 
 CONF = cfg.CONF
 CONF.register_opts(_OPTS, group=_base.AUTHTOKEN_GROUP)
@@ -398,7 +399,7 @@ def _conf_values_type_convert(conf):
         return {}
 
     opt_types = {}
-    for o in (_OPTS + _auth.AuthTokenPlugin.get_options()):
+    for o in _OPTS:
         type_dest = (getattr(o, 'type', str), o.dest)
         opt_types[o.dest] = type_dest
         # Also add the deprecated name with the same type and dest.
@@ -416,7 +417,7 @@ def _conf_values_type_convert(conf):
             # This option is not known to auth_token.
             pass
         except ValueError as e:
-            raise exc.ConfigurationError(
+            raise ksm_exceptions.ConfigurationError(
                 _('Unable to convert the value of %(key)s option into correct '
                   'type: %(ex)s') % {'key': k, 'ex': e})
         opts[dest] = v
@@ -480,7 +481,7 @@ class _BaseAuthProtocol(object):
                 data, user_auth_ref = self._do_fetch_token(request.user_token)
                 self._validate_token(user_auth_ref)
                 self._confirm_token_bind(user_auth_ref, request)
-            except exc.InvalidToken:
+            except ksm_exceptions.InvalidToken:
                 self.log.info(_LI('Invalid user token'))
                 request.user_token_valid = False
             else:
@@ -493,7 +494,7 @@ class _BaseAuthProtocol(object):
                 _, serv_auth_ref = self._do_fetch_token(request.service_token)
                 self._validate_token(serv_auth_ref)
                 self._confirm_token_bind(serv_auth_ref, request)
-            except exc.InvalidToken:
+            except ksm_exceptions.InvalidToken:
                 self.log.info(_LI('Invalid service token'))
                 request.service_token_valid = False
             else:
@@ -506,23 +507,23 @@ class _BaseAuthProtocol(object):
         """Perform the validation steps on the token.
 
         :param auth_ref: The token data
-        :type auth_ref: keystoneclient.access.AccessInfo
+        :type auth_ref: keystoneauth1.access.AccessInfo
 
         :raises exc.InvalidToken: if token is rejected
         """
         # 0 seconds of validity means it is invalid right now
         if auth_ref.will_expire_soon(stale_duration=0):
-            raise exc.InvalidToken(_('Token authorization failed'))
+            raise ksm_exceptions.InvalidToken(_('Token authorization failed'))
 
     def _do_fetch_token(self, token):
         """Helper method to fetch a token and convert it into an AccessInfo"""
         data = self._fetch_token(token)
 
         try:
-            return data, access.AccessInfo.factory(body=data, auth_token=token)
+            return data, access.create(body=data, auth_token=token)
         except Exception:
             self.log.warning(_LW('Invalid token contents.'), exc_info=True)
-            raise exc.InvalidToken(_('Token authorization failed'))
+            raise ksm_exceptions.InvalidToken(_('Token authorization failed'))
 
     def _fetch_token(self, token):
         """Fetch the token data based on the value in the header.
@@ -555,27 +556,17 @@ class _BaseAuthProtocol(object):
         if msg is False:
             msg = _('Token authorization failed')
 
-        raise exc.InvalidToken(msg)
+        raise ksm_exceptions.InvalidToken(msg)
 
     def _confirm_token_bind(self, auth_ref, req):
         if self._enforce_token_bind == _BIND_MODE.DISABLED:
             return
 
-        try:
-            if auth_ref.version == 'v2.0':
-                bind = auth_ref['token']['bind']
-            elif auth_ref.version == 'v3':
-                bind = auth_ref['bind']
-            else:
-                self._invalid_user_token()
-        except KeyError:
-            bind = {}
-
         # permissive and strict modes don't require there to be a bind
         permissive = self._enforce_token_bind in (_BIND_MODE.PERMISSIVE,
                                                   _BIND_MODE.STRICT)
 
-        if not bind:
+        if not auth_ref.bind:
             if permissive:
                 # no bind provided and none required
                 return
@@ -589,12 +580,12 @@ class _BaseAuthProtocol(object):
         else:
             name = self._enforce_token_bind
 
-        if name and name not in bind:
+        if name and name not in auth_ref.bind:
             self.log.info(_LI('Named bind mode %s not in bind information'),
                           name)
             self._invalid_user_token()
 
-        for bind_type, identifier in six.iteritems(bind):
+        for bind_type, identifier in six.iteritems(auth_ref.bind):
             if bind_type == _BIND_MODE.KERBEROS:
                 if req.auth_type != 'negotiate':
                     self.log.info(_LI('Kerberos credentials required and '
@@ -658,8 +649,8 @@ class AuthProtocol(_BaseAuthProtocol):
 
             self._local_oslo_config.register_opts(
                 _OPTS, group=_base.AUTHTOKEN_GROUP)
-            auth.register_conf_options(self._local_oslo_config,
-                                       group=_base.AUTHTOKEN_GROUP)
+            loading.register_auth_conf_options(self._local_oslo_config,
+                                               group=_base.AUTHTOKEN_GROUP)
 
         super(AuthProtocol, self).__init__(
             app,
@@ -747,8 +738,11 @@ class AuthProtocol(_BaseAuthProtocol):
                 self._reject_request()
 
         if request.user_token_valid:
-            request.set_user_headers(request.token_auth._user_auth_ref,
-                                     self._include_service_catalog)
+            user_auth_ref = request.token_auth._user_auth_ref
+            request.set_user_headers(user_auth_ref)
+
+            if self._include_service_catalog:
+                request.set_service_catalog_headers(user_auth_ref)
 
         if request.service_token and request.service_token_valid:
             request.set_service_headers(request.token_auth._serv_auth_ref)
@@ -848,11 +842,13 @@ class AuthProtocol(_BaseAuthProtocol):
 
                 self._token_cache.store(token_hashes[0], data)
 
-        except (exceptions.ConnectionRefused, exceptions.RequestTimeout,
-                exc.RevocationListError, exc.ServiceError) as e:
+        except (ksa_exceptions.ConnectFailure,
+                ksa_exceptions.RequestTimeout,
+                ksm_exceptions.RevocationListError,
+                ksm_exceptions.ServiceError) as e:
             self.log.critical(_LC('Unable to validate token: %s'), e)
             raise webob.exc.HTTPServiceUnavailable()
-        except exc.InvalidToken:
+        except ksm_exceptions.InvalidToken:
             self.log.debug('Token validation failure.', exc_info=True)
             if token_hashes:
                 self._token_cache.store_invalid(token_hashes[0])
@@ -873,10 +869,10 @@ class AuthProtocol(_BaseAuthProtocol):
             else:
                 # Can't do offline validation for this type of token.
                 return
-        except exceptions.CertificateConfigError:
+        except ksc_exceptions.CertificateConfigError:
             self.log.warning(_LW('Fetch certificate config failed, '
                                  'fallback to online validation.'))
-        except exc.RevocationListError:
+        except ksm_exceptions.RevocationListError:
             self.log.warning(_LW('Fetch revocation list failed, '
                                  'fallback to online validation.'))
         else:
@@ -888,7 +884,7 @@ class AuthProtocol(_BaseAuthProtocol):
 
         if auth_ref.version == 'v2.0' and not auth_ref.project_id:
             msg = _('Unable to determine service tenancy.')
-            raise exc.InvalidToken(msg)
+            raise ksm_exceptions.InvalidToken(msg)
 
     def _cms_verify(self, data, inform=cms.PKI_ASN1_FORM):
         """Verifies the signature of the provided data's IAW CMS syntax.
@@ -905,14 +901,15 @@ class AuthProtocol(_BaseAuthProtocol):
                 return cms.cms_verify(data, signing_cert_path,
                                       signing_ca_path,
                                       inform=inform).decode('utf-8')
-            except (exceptions.CMSError,
+            except (ksc_exceptions.CMSError,
                     cms.subprocess.CalledProcessError) as err:
                 self.log.warning(_LW('Verify error: %s'), err)
-                raise exc.InvalidToken(_('Token authorization failed'))
+                msg = _('Token authorization failed')
+                raise ksm_exceptions.InvalidToken(msg)
 
         try:
             return verify()
-        except exceptions.CertificateConfigError:
+        except ksc_exceptions.CertificateConfigError:
             # the certs might be missing; unconditionally fetch to avoid racing
             self._fetch_signing_cert()
             self._fetch_ca_cert()
@@ -920,7 +917,7 @@ class AuthProtocol(_BaseAuthProtocol):
             try:
                 # retry with certs in place
                 return verify()
-            except exceptions.CertificateConfigError as err:
+            except ksc_exceptions.CertificateConfigError as err:
                 # if this is still occurring, something else is wrong and we
                 # need err.output to identify the problem
                 self.log.error(_LE('CMS Verify output: %s'), err.output)
@@ -942,7 +939,7 @@ class AuthProtocol(_BaseAuthProtocol):
         # TypeError If the signed_text is not zlib compressed
         # binascii.Error if signed_text has incorrect base64 padding (py34)
         except (TypeError, binascii.Error):
-            raise exc.InvalidToken(signed_text)
+            raise ksm_exceptions.InvalidToken(signed_text)
 
     def _fetch_signing_cert(self):
         self._signing_directory.write_file(
@@ -969,17 +966,33 @@ class AuthProtocol(_BaseAuthProtocol):
         # !!! - UNDER NO CIRCUMSTANCES COPY ANY OF THIS CODE - !!!
 
         group = self._conf_get('auth_section') or _base.AUTHTOKEN_GROUP
-        plugin_name = self._conf_get('auth_plugin', group=group)
+
+        # NOTE(jamielennox): auth_plugin was deprecated to auth_type. _conf_get
+        # doesn't handle that deprecation in the case of conf dict options so
+        # we have to manually check the value
+        plugin_name = (self._conf_get('auth_type', group=group)
+                       or self._conf.get('auth_plugin'))
+
+        if not plugin_name:
+            return _auth.AuthTokenPlugin(
+                log=self.log,
+                auth_admin_prefix=self._conf_get('auth_admin_prefix',
+                                                 group=group),
+                auth_host=self._conf_get('auth_host', group=group),
+                auth_port=self._conf_get('auth_port', group=group),
+                auth_protocol=self._conf_get('auth_protocol', group=group),
+                identity_uri=self._conf_get('identity_uri', group=group),
+                admin_token=self._conf_get('admin_token', group=group),
+                admin_user=self._conf_get('admin_user', group=group),
+                admin_password=self._conf_get('admin_password', group=group),
+                admin_tenant_name=self._conf_get('admin_tenant_name',
+                                                 group=group)
+            )
+
+        plugin_loader = loading.get_plugin_loader(plugin_name)
+        plugin_opts = [o._to_oslo_opt() for o in plugin_loader.get_options()]
         plugin_kwargs = dict()
 
-        if plugin_name:
-            plugin_class = auth.get_plugin_class(plugin_name)
-        else:
-            plugin_class = _auth.AuthTokenPlugin
-            # logger object is a required parameter of the default plugin
-            plugin_kwargs['log'] = self.log
-
-        plugin_opts = plugin_class.get_options()
         (self._local_oslo_config or CONF).register_opts(plugin_opts,
                                                         group=group)
 
@@ -989,7 +1002,7 @@ class AuthProtocol(_BaseAuthProtocol):
                 val = opt.type(val)
             plugin_kwargs[opt.dest] = val
 
-        return plugin_class.load_from_options(**plugin_kwargs)
+        return plugin_loader.load_from_options(**plugin_kwargs)
 
     def _determine_project(self):
         """Determine a project name from all available config sources.
@@ -1035,14 +1048,14 @@ class AuthProtocol(_BaseAuthProtocol):
         # same as calling Session.load_from_conf_options(CONF, GROUP)
         # however we can't do that because we have to use _conf_get to
         # support the paste.ini options.
-        sess = session.Session.construct(dict(
+        sess = session_loading.Session().load_from_options(
             cert=self._conf_get('certfile'),
             key=self._conf_get('keyfile'),
             cacert=self._conf_get('cafile'),
             insecure=self._conf_get('insecure'),
             timeout=self._conf_get('http_connect_timeout'),
             user_agent=self._build_useragent_string()
-        ))
+        )
 
         auth_plugin = self._get_auth_plugin()
 
@@ -1105,7 +1118,7 @@ def app_factory(global_conf, **local_conf):
 
 
 # NOTE(jamielennox): Maintained here for public API compatibility.
-InvalidToken = exc.InvalidToken
-ServiceError = exc.ServiceError
-ConfigurationError = exc.ConfigurationError
-RevocationListError = exc.RevocationListError
+InvalidToken = ksm_exceptions.InvalidToken
+ServiceError = ksm_exceptions.ServiceError
+ConfigurationError = ksm_exceptions.ConfigurationError
+RevocationListError = ksm_exceptions.RevocationListError

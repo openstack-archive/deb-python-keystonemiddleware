@@ -10,7 +10,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-from keystoneclient.auth.identity import base as base_identity
+from keystoneauth1.identity import base as base_identity
 
 
 class _TokenData(object):
@@ -47,7 +47,9 @@ class _TokenData(object):
 
     @property
     def user_domain_id(self):
-        """Returns the domain id of the user associated with the authentication
+        """The domain ID of the user associated with the authentication.
+
+        Returns the domain id of the user associated with the authentication
         request.
 
         :returns: str
@@ -69,7 +71,9 @@ class _TokenData(object):
 
     @property
     def project_domain_id(self):
-        """The domain id of the project associated with the authentication
+        """The ID of the project associated with the authentication.
+
+        The domain id of the project associated with the authentication
         request.
 
         :rtype: str
@@ -82,12 +86,36 @@ class _TokenData(object):
         return self._stored_auth_ref.project_domain_id
 
     @property
+    def domain_id(self):
+        """The domain ID the authentication is scoped to.
+
+        :rtype: str
+        """
+        return self._stored_auth_ref.domain_id
+
+    @property
     def trust_id(self):
         """Returns the trust id associated with the authentication request..
 
         :rtype: str
         """
         return self._stored_auth_ref.trust_id
+
+    @property
+    def trustor_user_id(self):
+        """The trustor id associated with the authentication request.
+
+        :rtype: str
+        """
+        return self._stored_auth_ref.trustor_user_id
+
+    @property
+    def trustee_user_id(self):
+        """The trustee id associated with the authentication request.
+
+        :rtype: str
+        """
+        return self._stored_auth_ref.trustee_user_id
 
     @property
     def role_ids(self):

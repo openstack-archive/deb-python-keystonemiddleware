@@ -12,8 +12,8 @@
 
 import uuid
 
-from keystoneclient import auth
-from keystoneclient import fixture
+from keystoneauth1 import fixture
+from keystoneauth1 import loading
 
 from keystonemiddleware.auth_token import _base
 from keystonemiddleware.tests.unit.auth_token import base
@@ -26,18 +26,19 @@ AUTH_URL = 'https://keystone.auth.com:1234'
 class BaseUserPluginTests(object):
 
     def configure_middleware(self,
-                             auth_plugin,
+                             auth_type,
                              **kwargs):
-        opts = auth.get_plugin_class(auth_plugin).get_options()
+        opts = loading.get_auth_plugin_conf_options(auth_type)
         self.cfg.register_opts(opts, group=_base.AUTHTOKEN_GROUP)
 
         # Since these tests cfg.config() themselves rather than waiting for
         # auth_token to do it on __init__ we need to register the base auth
         # options (e.g., auth_plugin)
-        auth.register_conf_options(self.cfg.conf, group=_base.AUTHTOKEN_GROUP)
+        loading.register_auth_conf_options(self.cfg.conf,
+                                           group=_base.AUTHTOKEN_GROUP)
 
         self.cfg.config(group=_base.AUTHTOKEN_GROUP,
-                        auth_plugin=auth_plugin,
+                        auth_type=auth_type,
                         **kwargs)
 
     def assertTokenDataEqual(self, token_id, token, token_data):
@@ -92,7 +93,7 @@ class V2UserPluginTests(BaseUserPluginTests, base.BaseAuthTokenTestCase):
                        admin=BASE_URI,
                        internal=BASE_URI)
 
-        self.configure_middleware(auth_plugin='v2password',
+        self.configure_middleware(auth_type='v2password',
                                   auth_url='%s/v2.0/' % AUTH_URL,
                                   user_id=self.service_token.user_id,
                                   password=uuid.uuid4().hex,
@@ -133,6 +134,15 @@ class V2UserPluginTests(BaseUserPluginTests, base.BaseAuthTokenTestCase):
         self.assertIsNone(token_data.user_domain_id)
         self.assertIsNone(token_data.project_domain_id)
 
+    def test_trust_scope(self):
+        token_id, token = self.get_token()
+        token.set_trust()
+
+        plugin = self.get_plugin(token_id)
+        self.assertEqual(token.trust_id, plugin.user.trust_id)
+        self.assertEqual(token.trustee_user_id, plugin.user.trustee_user_id)
+        self.assertIsNone(plugin.user.trustor_user_id)
+
 
 class V3UserPluginTests(BaseUserPluginTests, base.BaseAuthTokenTestCase):
 
@@ -146,7 +156,7 @@ class V3UserPluginTests(BaseUserPluginTests, base.BaseAuthTokenTestCase):
                                  admin=BASE_URI,
                                  internal=BASE_URI)
 
-        self.configure_middleware(auth_plugin='v3password',
+        self.configure_middleware(auth_type='v3password',
                                   auth_url='%s/v3/' % AUTH_URL,
                                   user_id=self.service_token.user_id,
                                   password=uuid.uuid4().hex,
@@ -166,10 +176,11 @@ class V3UserPluginTests(BaseUserPluginTests, base.BaseAuthTokenTestCase):
     def get_role_names(self, token):
         return set(x['name'] for x in token['token'].get('roles', []))
 
-    def get_token(self):
+    def get_token(self, project=True):
         token_id = uuid.uuid4().hex
         token = fixture.V3Token()
-        token.set_project_scope()
+        if project:
+            token.set_project_scope()
         token.add_role()
 
         request_headers = {'X-Auth-Token': self.service_token_id,
@@ -191,3 +202,20 @@ class V3UserPluginTests(BaseUserPluginTests, base.BaseAuthTokenTestCase):
         self.assertEqual(token.user_domain_id, token_data.user_domain_id)
         self.assertEqual(token.project_id, token_data.project_id)
         self.assertEqual(token.project_domain_id, token_data.project_domain_id)
+
+    def test_domain_scope(self):
+        token_id, token = self.get_token(project=False)
+        token.set_domain_scope()
+
+        plugin = self.get_plugin(token_id)
+        self.assertEqual(token.domain_id, plugin.user.domain_id)
+        self.assertIsNone(plugin.user.project_id)
+
+    def test_trust_scope(self):
+        token_id, token = self.get_token(project=False)
+        token.set_trust_scope()
+
+        plugin = self.get_plugin(token_id)
+        self.assertEqual(token.trust_id, plugin.user.trust_id)
+        self.assertEqual(token.trustor_user_id, plugin.user.trustor_user_id)
+        self.assertEqual(token.trustee_user_id, plugin.user.trustee_user_id)
