@@ -69,7 +69,7 @@ Build-Depends-Indep: python-babel,
 Standards-Version: 3.9.6
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/python-keystonemiddleware.git
 Vcs-Git: git://anonscm.debian.org/openstack/python-keystonemiddleware.git
-Homepage: http://launchpad.net/keystonemiddleware
+Homepage: https://launchpad.net/keystonemiddleware
 
 Package: python-keystonemiddleware
 Architecture: all
