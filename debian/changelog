@@ -1,3 +1,9 @@
+python-keystonemiddleware (4.4.0-2) unstable; urgency=medium
+
+  * Added git as build-depends-indep.
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 04 Apr 2016 11:22:51 +0000
+
 python-keystonemiddleware (4.4.0-1) unstable; urgency=medium
 
   [ Ondřej Nový ]
