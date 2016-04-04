@@ -14,10 +14,9 @@ import logging
 import uuid
 
 import fixtures
-from keystoneclient import fixture as client_fixtures
-from keystoneclient import utils
-import mock
+from keystoneauth1 import fixture as client_fixtures
 from oslo_utils import timeutils
+from positional import positional
 
 from keystonemiddleware import auth_token
 from keystonemiddleware.auth_token import _exceptions
@@ -35,22 +34,20 @@ class AuthTokenFixture(fixtures.Fixture):
         self._token_data = {}
         self.addCleanup(self._token_data.clear)
         _LOG.info('Using Testing AuthTokenFixture...')
-        self.mockpatch = mock.patch.object(
+        self.useFixture(fixtures.MockPatchObject(
             auth_token.AuthProtocol,
-            '_fetch_token',
-            self._fetch_token)
-        self.mockpatch.start()
-        # Make sure we stop patching when we do the cleanup.
-        self.addCleanup(self.mockpatch.stop)
+            'fetch_token',
+            self.fetch_token))
 
     @property
     def tokens(self):
         return self._token_data.keys()
 
-    @utils.positional(1)
-    def add_token_data(self, token_id=None, expires=None, user_id=None,
-                       user_name=None, user_domain_id=None,
-                       user_domain_name=None, project_id=None,
+    @positional(1)
+    def add_token_data(self, token_id=None, expires=None,
+                       user_id=None, user_name=None,
+                       user_domain_id=None, user_domain_name=None,
+                       project_id=None, project_name=None,
                        project_domain_id=None, project_domain_name=None,
                        role_list=None, is_v2=False):
         """Add token data to the auth_token fixture."""
@@ -64,11 +61,12 @@ class AuthTokenFixture(fixtures.Fixture):
         if is_v2:
             token = client_fixtures.V2Token(
                 token_id=token_id, expires=expires, tenant_id=project_id,
-                user_id=user_id, user_name=user_name)
+                tenant_name=project_name, user_id=user_id, user_name=user_name)
         else:
             token = client_fixtures.V3Token(
                 expires=expires, user_id=user_id, user_name=user_name,
                 user_domain_id=user_domain_id, project_id=project_id,
+                project_name=project_name,
                 project_domain_id=project_domain_id,
                 user_domain_name=user_domain_name,
                 project_domain_name=project_domain_name)
@@ -76,8 +74,8 @@ class AuthTokenFixture(fixtures.Fixture):
             token.add_role(name=role)
         self._token_data[token_id] = token
 
-    def _fetch_token(self, token):
-        """Low level replacement of _fetch_token for AuthProtocol."""
+    def fetch_token(self, token):
+        """Low level replacement of fetch_token for AuthProtocol."""
         token_data = self._token_data.get(token, {})
         if token_data:
             self._assert_token_not_expired(token_data.expires)

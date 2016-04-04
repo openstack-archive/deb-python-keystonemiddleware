@@ -13,7 +13,6 @@
 # under the License.
 
 import datetime
-import json
 import logging
 import os
 import shutil
@@ -666,15 +665,6 @@ class CommonAuthTokenMiddlewareTest(object):
             self.call_middleware(headers={'X-Auth-Token': token},
                                  expected_status=503)
 
-    def test_unexpected_exception_in_validate_offline(self):
-        # When an unexpected exception is hit during _validate_offline,
-        # 500 is returned
-        token = self.token_dict['uuid_token_default']
-        with mock.patch.object(self.middleware, '_validate_offline',
-                               side_effect=Exception):
-            self.call_middleware(headers={'X-Auth-Token': token},
-                                 expected_status=500)
-
     def test_cached_revoked_uuid(self):
         # When the UUID token is cached and revoked, 401 is returned.
         self._test_cache_revoked(self.token_dict['uuid_token_default'])
@@ -768,6 +758,30 @@ class CommonAuthTokenMiddlewareTest(object):
     def test_revoked_hashed_pkiz_token(self):
         self._test_revoked_hashed_token('signed_token_scoped_pkiz')
 
+    def test_revoked_pki_token_by_audit_id(self):
+        # When the audit ID is in the revocation list, the token is invalid.
+        self.set_middleware()
+        token = self.token_dict['signed_token_scoped']
+
+        # Put the token audit ID in the revocation list,
+        # the entry will have a false token ID so the token ID doesn't match.
+        fake_token_id = uuid.uuid4().hex
+        # The audit_id value is in examples/pki/cms/auth_*_token_scoped.json.
+        audit_id = 'SLIXlXQUQZWUi9VJrqdXqA'
+        revocation_list_data = {
+            'revoked': [
+                {
+                    'id': fake_token_id,
+                    'audit_id': audit_id
+                },
+            ]
+        }
+        self.middleware._revocations._list = jsonutils.dumps(
+            revocation_list_data)
+
+        self.call_middleware(headers={'X-Auth-Token': token},
+                             expected_status=401)
+
     def get_revocation_list_json(self, token_ids=None, mode=None):
         if token_ids is None:
             key = 'revoked_token_hash' + (('_' + mode) if mode else '')
@@ -800,62 +814,59 @@ class CommonAuthTokenMiddlewareTest(object):
             [self.token_dict['revoked_token_hash_sha256']])
         self.assertTrue(result)
 
-    def test_verify_signed_token_raises_exception_for_revoked_token(self):
+    def test_validate_offline_raises_exception_for_revoked_token(self):
         self.middleware._revocations._list = (
             self.get_revocation_list_json())
         self.assertRaises(ksm_exceptions.InvalidToken,
-                          self.middleware._verify_signed_token,
+                          self.middleware._validate_offline,
                           self.token_dict['revoked_token'],
                           [self.token_dict['revoked_token_hash']])
 
-    def test_verify_signed_token_raises_exception_for_revoked_token_s256(self):
+    def test_validate_offline_raises_exception_for_revoked_token_s256(self):
         self.conf['hash_algorithms'] = ','.join(['sha256', 'md5'])
         self.set_middleware()
         self.middleware._revocations._list = (
             self.get_revocation_list_json(mode='sha256'))
         self.assertRaises(ksm_exceptions.InvalidToken,
-                          self.middleware._verify_signed_token,
+                          self.middleware._validate_offline,
                           self.token_dict['revoked_token'],
                           [self.token_dict['revoked_token_hash_sha256'],
                            self.token_dict['revoked_token_hash']])
 
-    def test_verify_signed_token_raises_exception_for_revoked_pkiz_token(self):
+    def test_validate_offline_raises_exception_for_revoked_pkiz_token(self):
         self.middleware._revocations._list = (
             self.examples.REVOKED_TOKEN_PKIZ_LIST_JSON)
         self.assertRaises(ksm_exceptions.InvalidToken,
-                          self.middleware._verify_pkiz_token,
+                          self.middleware._validate_offline,
                           self.token_dict['revoked_token_pkiz'],
                           [self.token_dict['revoked_token_pkiz_hash']])
 
-    def assertIsValidJSON(self, text):
-        json.loads(text)
-
-    def test_verify_signed_token_succeeds_for_unrevoked_token(self):
+    def test_validate_offline_succeeds_for_unrevoked_token(self):
         self.middleware._revocations._list = (
             self.get_revocation_list_json())
-        text = self.middleware._verify_signed_token(
+        token = self.middleware._validate_offline(
             self.token_dict['signed_token_scoped'],
             [self.token_dict['signed_token_scoped_hash']])
-        self.assertIsValidJSON(text)
+        self.assertIsInstance(token, dict)
 
     def test_verify_signed_compressed_token_succeeds_for_unrevoked_token(self):
         self.middleware._revocations._list = (
             self.get_revocation_list_json())
-        text = self.middleware._verify_pkiz_token(
+        token = self.middleware._validate_offline(
             self.token_dict['signed_token_scoped_pkiz'],
             [self.token_dict['signed_token_scoped_hash']])
-        self.assertIsValidJSON(text)
+        self.assertIsInstance(token, dict)
 
-    def test_verify_signed_token_succeeds_for_unrevoked_token_sha256(self):
+    def test_validate_offline_token_succeeds_for_unrevoked_token_sha256(self):
         self.conf['hash_algorithms'] = ','.join(['sha256', 'md5'])
         self.set_middleware()
         self.middleware._revocations._list = (
             self.get_revocation_list_json(mode='sha256'))
-        text = self.middleware._verify_signed_token(
+        token = self.middleware._validate_offline(
             self.token_dict['signed_token_scoped'],
             [self.token_dict['signed_token_scoped_hash_sha256'],
              self.token_dict['signed_token_scoped_hash']])
-        self.assertIsValidJSON(text)
+        self.assertIsInstance(token, dict)
 
     def test_get_token_revocation_list_fetched_time_returns_min(self):
         self.middleware._revocations._fetched_time = None
@@ -1301,6 +1312,7 @@ class V2CertDownloadMiddlewareTest(BaseAuthTokenMiddlewareTest,
         super(V2CertDownloadMiddlewareTest, self).setUp(
             auth_version=self.auth_version,
             fake_app=self.fake_app)
+        self.logger = self.useFixture(fixtures.FakeLogger())
         self.base_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.base_dir)
         self.cert_dir = os.path.join(self.base_dir, 'certs')
@@ -1326,10 +1338,15 @@ class V2CertDownloadMiddlewareTest(BaseAuthTokenMiddlewareTest,
                                status_code=404)
         self.requests_mock.get('%s%s' % (BASE_URI, self.signing_path),
                                status_code=404)
-        self.assertRaises(ksc_exceptions.CertificateConfigError,
-                          self.middleware._verify_signed_token,
-                          self.examples.SIGNED_TOKEN_SCOPED,
-                          [self.examples.SIGNED_TOKEN_SCOPED_HASH])
+
+        token = self.middleware._validate_offline(
+            self.examples.SIGNED_TOKEN_SCOPED,
+            [self.examples.SIGNED_TOKEN_SCOPED_HASH])
+
+        self.assertIsNone(token)
+
+        self.assertIn('Fetch certificate config failed', self.logger.output)
+        self.assertIn('fallback to online validation', self.logger.output)
 
     def test_fetch_signing_cert(self):
         data = 'FAKE CERT'
@@ -2438,12 +2455,37 @@ class TestAuthPluginUserAgentGeneration(BaseAuthTokenMiddlewareTest):
         sess = app._identity_server._adapter.session
         expected_ua = ('{0}keystonemiddleware.auth_token/{1}'
                        .format(project, ksm_version))
-        self.assertEqual(expected_ua, sess.user_agent)
+        self.assertThat(sess.user_agent, matchers.StartsWith(expected_ua))
 
 
 class TestAuthPluginLocalOsloConfig(BaseAuthTokenMiddlewareTest):
-    def test_project_in_local_oslo_configuration(self):
-        options = {
+
+    def setUp(self):
+        super(TestAuthPluginLocalOsloConfig, self).setUp()
+        self.project = uuid.uuid4().hex
+
+        # NOTE(cdent): The options below are selected from those
+        # which are statically registered by auth_token middleware
+        # in the 'keystone_authtoken' group. Additional options, from
+        # plugins, are registered dynamically so must not be used here.
+        self.oslo_options = {
+            'auth_uri': uuid.uuid4().hex,
+            'identity_uri': uuid.uuid4().hex,
+        }
+
+        self.local_oslo_config = cfg.ConfigOpts()
+        self.local_oslo_config.register_group(cfg.OptGroup(
+            name='keystone_authtoken'))
+        self.local_oslo_config.register_opts(auth_token._OPTS,
+                                             group='keystone_authtoken')
+        self.local_oslo_config.register_opts(auth_token._auth.OPTS,
+                                             group='keystone_authtoken')
+        for option, value in self.oslo_options.items():
+            self.local_oslo_config.set_override(option, value,
+                                                'keystone_authtoken')
+        self.local_oslo_config(args=[], project=self.project)
+
+        self.file_options = {
             'auth_type': 'password',
             'auth_uri': uuid.uuid4().hex,
             'password': uuid.uuid4().hex,
@@ -2453,14 +2495,36 @@ class TestAuthPluginLocalOsloConfig(BaseAuthTokenMiddlewareTest):
                    "auth_type=%(auth_type)s\n"
                    "auth_uri=%(auth_uri)s\n"
                    "auth_url=%(auth_uri)s\n"
-                   "password=%(password)s\n" % options)
-        conf_file_fixture = self.useFixture(
-            createfile.CreateFileWithContent("my_app", content))
-        conf = {'oslo_config_project': 'my_app',
-                'oslo_config_file': conf_file_fixture.path}
+                   "password=%(password)s\n" % self.file_options)
+        self.conf_file_fixture = self.useFixture(
+            createfile.CreateFileWithContent(self.project, content))
+
+    def test_project_in_local_oslo_configuration(self):
+        conf = {'oslo_config_project': self.project,
+                'oslo_config_file': self.conf_file_fixture.path}
         app = self._create_app(conf, uuid.uuid4().hex)
-        for option in options:
-            self.assertEqual(options[option], app._conf_get(option))
+        for option in self.file_options:
+            self.assertEqual(self.file_options[option],
+                             app._conf_get(option), option)
+
+    def test_passed_oslo_configuration(self):
+        conf = {'oslo_config_config': self.local_oslo_config}
+        app = self._create_app(conf, uuid.uuid4().hex)
+        for option in self.oslo_options:
+            self.assertEqual(self.oslo_options[option],
+                             app._conf_get(option))
+
+    def test_passed_olso_configuration_wins(self):
+        """oslo_config_config has precedence over oslo_config_project."""
+        conf = {'oslo_config_project': self.project,
+                'oslo_config_config': self.local_oslo_config,
+                'oslo_config_file': self.conf_file_fixture.path}
+        app = self._create_app(conf, uuid.uuid4().hex)
+        for option in self.oslo_options:
+            self.assertEqual(self.oslo_options[option],
+                             app._conf_get(option))
+        self.assertNotEqual(self.file_options['auth_uri'],
+                            app._conf_get('auth_uri'))
 
     def _create_app(self, conf, project_version):
         fake_pkg_resources = mock.Mock()
@@ -2469,7 +2533,10 @@ class TestAuthPluginLocalOsloConfig(BaseAuthTokenMiddlewareTest):
         body = uuid.uuid4().hex
         with mock.patch('keystonemiddleware.auth_token.pkg_resources',
                         new=fake_pkg_resources):
-            return self.create_simple_middleware(body=body, conf=conf)
+            # use_global_conf is poorly named. What it means is
+            # don't use the config created in test setUp.
+            return self.create_simple_middleware(body=body, conf=conf,
+                                                 use_global_conf=True)
 
 
 def load_tests(loader, tests, pattern):

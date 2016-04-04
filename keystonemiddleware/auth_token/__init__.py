@@ -301,14 +301,15 @@ _OPTS = [
                ' high number of revocation events combined with a low cache'
                ' duration may significantly reduce performance.'),
     cfg.StrOpt('memcache_security_strategy',
-               default=None,
+               default='None',
+               choices=('None', 'MAC', 'ENCRYPT'),
+               ignore_case=True,
                help='(Optional) If defined, indicate whether token data'
                ' should be authenticated or authenticated and encrypted.'
-               ' Acceptable values are MAC or ENCRYPT.  If MAC, token data is'
-               ' authenticated (with HMAC) in the cache. If ENCRYPT, token'
-               ' data is encrypted and authenticated in the cache. If the'
-               ' value is not one of these options or empty, auth_token will'
-               ' raise an exception on initialization.'),
+               ' If MAC, token data is authenticated (with HMAC) in the cache.'
+               ' If ENCRYPT, token data is encrypted and authenticated in the'
+               ' cache. If the value is not one of these options or empty,'
+               ' auth_token will raise an exception on initialization.'),
     cfg.StrOpt('memcache_secret_key',
                default=None,
                secret=True,
@@ -369,7 +370,7 @@ _OPTS = [
                 ' only while migrating from a less secure algorithm to a more'
                 ' secure one. Once all the old tokens are expired this option'
                 ' should be set to a single value for better performance.'),
-] + _auth.OPTS
+]
 
 CONF = cfg.CONF
 CONF.register_opts(_OPTS, group=_base.AUTHTOKEN_GROUP)
@@ -399,7 +400,7 @@ def _conf_values_type_convert(conf):
         return {}
 
     opt_types = {}
-    for o in _OPTS:
+    for o in _OPTS + _auth.OPTS:
         type_dest = (getattr(o, 'type', str), o.dest)
         opt_types[o.dest] = type_dest
         # Also add the deprecated name with the same type and dest.
@@ -428,7 +429,17 @@ def _get_project_version(project):
     return pkg_resources.get_distribution(project).version
 
 
-class _BaseAuthProtocol(object):
+def _uncompress_pkiz(token):
+    # TypeError If the signed_text is not zlib compressed binascii.Error if
+    # signed_text has incorrect base64 padding (py34)
+
+    try:
+        return cms.pkiz_uncompress(token)
+    except (TypeError, binascii.Error):
+        raise ksm_exceptions.InvalidToken(token)
+
+
+class BaseAuthProtocol(object):
     """A base class for AuthProtocol token checking implementations.
 
     :param Callable app: The next application to call after middleware.
@@ -517,7 +528,7 @@ class _BaseAuthProtocol(object):
 
     def _do_fetch_token(self, token):
         """Helper method to fetch a token and convert it into an AccessInfo"""
-        data = self._fetch_token(token)
+        data = self.fetch_token(token)
 
         try:
             return data, access.create(body=data, auth_token=token)
@@ -525,7 +536,7 @@ class _BaseAuthProtocol(object):
             self.log.warning(_LW('Invalid token contents.'), exc_info=True)
             raise ksm_exceptions.InvalidToken(_('Token authorization failed'))
 
-    def _fetch_token(self, token):
+    def fetch_token(self, token):
         """Fetch the token data based on the value in the header.
 
         Retrieve the data associated with the token value that was in the
@@ -613,7 +624,7 @@ class _BaseAuthProtocol(object):
                 self._invalid_user_token()
 
 
-class AuthProtocol(_BaseAuthProtocol):
+class AuthProtocol(BaseAuthProtocol):
     """Middleware that handles authenticating client calls."""
 
     _SIGNING_CERT_FILE_NAME = 'signing_cert.pem'
@@ -628,27 +639,31 @@ class AuthProtocol(_BaseAuthProtocol):
         # conf value into correct type.
         self._conf = _conf_values_type_convert(conf)
 
-        # NOTE(sileht): If we don't want to use oslo.config global object
-        # we can set the paste "oslo_config_project" and the middleware
-        # will load the configuration with a local oslo.config object.
-        self._local_oslo_config = None
-        if 'oslo_config_project' in conf:
+        # NOTE(sileht, cdent): If we don't want to use oslo.config global
+        # object there are two options: set "oslo_config_project" in
+        # paste.ini and the middleware will load the configuration with a
+        # local oslo.config object or the caller which instantiates
+        # AuthProtocol can pass in an existing oslo.config as the
+        # value of the "oslo_config_config" key in conf. If both are
+        # set "olso_config_config" is used.
+        self._local_oslo_config = conf.get('oslo_config_config')
+        if (not self._local_oslo_config) and ('oslo_config_project' in conf):
             if 'oslo_config_file' in conf:
                 default_config_files = [conf['oslo_config_file']]
             else:
                 default_config_files = None
-
-            # For unit tests, support passing in a ConfigOpts in
-            # oslo_config_config.
-            self._local_oslo_config = conf.get('oslo_config_config',
-                                               cfg.ConfigOpts())
+            self._local_oslo_config = cfg.ConfigOpts()
             self._local_oslo_config(
-                {}, project=conf['oslo_config_project'],
+                [], project=conf['oslo_config_project'],
                 default_config_files=default_config_files,
                 validate_default_values=True)
 
-            self._local_oslo_config.register_opts(
-                _OPTS, group=_base.AUTHTOKEN_GROUP)
+        if self._local_oslo_config:
+            self._local_oslo_config.register_opts(_OPTS,
+                                                  group=_base.AUTHTOKEN_GROUP)
+            self._local_oslo_config.register_opts(_auth.OPTS,
+                                                  group=_base.AUTHTOKEN_GROUP)
+
             loading.register_auth_conf_options(self._local_oslo_config,
                                                group=_base.AUTHTOKEN_GROUP)
 
@@ -735,7 +750,9 @@ class AuthProtocol(_BaseAuthProtocol):
                 self.log.info(_LI('Deferring reject downstream'))
             else:
                 self.log.info(_LI('Rejecting request'))
-                self._reject_request()
+                raise webob.exc.HTTPUnauthorized(
+                    body='Authentication required',
+                    headers=self._reject_auth_headers)
 
         if request.user_token_valid:
             user_auth_ref = request.token_auth._user_auth_ref
@@ -767,17 +784,6 @@ class AuthProtocol(_BaseAuthProtocol):
     def _reject_auth_headers(self):
         header_val = 'Keystone uri=\'%s\'' % self._auth_uri
         return [('WWW-Authenticate', header_val)]
-
-    def _reject_request(self):
-        """Redirect client to auth server.
-
-        :param env: wsgi request environment
-        :param start_response: wsgi response callback
-        :returns: HTTPUnauthorized http response
-
-        """
-        raise webob.exc.HTTPUnauthorized(body='Authentication required',
-                                         headers=self._reject_auth_headers)
 
     def _token_hashes(self, token):
         """Generate a list of hashes that the current token may be cached as.
@@ -814,7 +820,7 @@ class AuthProtocol(_BaseAuthProtocol):
             if cached:
                 return cached
 
-    def _fetch_token(self, token):
+    def fetch_token(self, token):
         """Retrieve a token from either a PKI bundle or the identity server.
 
         :param str token: token id
@@ -854,21 +860,23 @@ class AuthProtocol(_BaseAuthProtocol):
                 self._token_cache.store_invalid(token_hashes[0])
             self.log.warning(_LW('Authorization failed for token'))
             raise
-        except Exception:
-            self.log.critical(_LC('Unable to validate token'), exc_info=True)
-            raise webob.exc.HTTPInternalServerError()
 
         return data
 
     def _validate_offline(self, token, token_hashes):
+        if cms.is_pkiz(token):
+            token_data = _uncompress_pkiz(token)
+            inform = cms.PKIZ_CMS_FORM
+        elif cms.is_asn1_token(token):
+            token_data = cms.token_to_cms(token)
+            inform = cms.PKI_ASN1_FORM
+        else:
+            # Can't do offline validation for this type of token.
+            return
+
         try:
-            if cms.is_pkiz(token):
-                verified = self._verify_pkiz_token(token, token_hashes)
-            elif cms.is_asn1_token(token):
-                verified = self._verify_signed_token(token, token_hashes)
-            else:
-                # Can't do offline validation for this type of token.
-                return
+            self._revocations.check(token_hashes)
+            verified = self._cms_verify(token_data, inform)
         except ksc_exceptions.CertificateConfigError:
             self.log.warning(_LW('Fetch certificate config failed, '
                                  'fallback to online validation.'))
@@ -877,6 +885,18 @@ class AuthProtocol(_BaseAuthProtocol):
                                  'fallback to online validation.'))
         else:
             data = jsonutils.loads(verified)
+
+            audit_ids = None
+            if 'access' in data:
+                # It's a v2 token.
+                audit_ids = data['access']['token'].get('audit_ids')
+            else:
+                # It's a v3 token
+                audit_ids = data['token'].get('audit_ids')
+
+            if audit_ids:
+                self._revocations.check_by_audit_id(audit_ids)
+
             return data
 
     def _validate_token(self, auth_ref):
@@ -923,24 +943,6 @@ class AuthProtocol(_BaseAuthProtocol):
                 self.log.error(_LE('CMS Verify output: %s'), err.output)
                 raise
 
-    def _verify_signed_token(self, signed_text, token_ids):
-        """Check that the token is unrevoked and has a valid signature."""
-        self._revocations.check(token_ids)
-        formatted = cms.token_to_cms(signed_text)
-        verified = self._cms_verify(formatted)
-        return verified
-
-    def _verify_pkiz_token(self, signed_text, token_ids):
-        self._revocations.check(token_ids)
-        try:
-            uncompressed = cms.pkiz_uncompress(signed_text)
-            verified = self._cms_verify(uncompressed, inform=cms.PKIZ_CMS_FORM)
-            return verified
-        # TypeError If the signed_text is not zlib compressed
-        # binascii.Error if signed_text has incorrect base64 padding (py34)
-        except (TypeError, binascii.Error):
-            raise ksm_exceptions.InvalidToken(signed_text)
-
     def _fetch_signing_cert(self):
         self._signing_directory.write_file(
             self._SIGNING_CERT_FILE_NAME,
@@ -952,18 +954,10 @@ class AuthProtocol(_BaseAuthProtocol):
             self._identity_server.fetch_ca_cert())
 
     def _get_auth_plugin(self):
-        # NOTE(jamielennox): Ideally this would use get_from_conf_options
+        # NOTE(jamielennox): Ideally this would use load_from_conf_options
         # however that is not possible because we have to support the override
-        # pattern we use in _conf_get. There is a somewhat replacement for this
-        # in keystoneclient in load_from_options_getter which should be used
-        # when available. Until then this is essentially a copy and paste of
-        # the ksc load_from_conf_options code because we need to get a fix out
-        # for this quickly.
-
-        # FIXME(jamielennox): update to use load_from_options_getter when
-        # https://review.openstack.org/162529 merges.
-
-        # !!! - UNDER NO CIRCUMSTANCES COPY ANY OF THIS CODE - !!!
+        # pattern we use in _conf_get. This function therefore does a manual
+        # version of load_from_conf_options with the fallback plugin inline.
 
         group = self._conf_get('auth_section') or _base.AUTHTOKEN_GROUP
 
@@ -989,20 +983,16 @@ class AuthProtocol(_BaseAuthProtocol):
                                                  group=group)
             )
 
+        # Plugin option registration is normally done as part of the load_from
+        # function rather than the register function so copy here.
         plugin_loader = loading.get_plugin_loader(plugin_name)
-        plugin_opts = [o._to_oslo_opt() for o in plugin_loader.get_options()]
-        plugin_kwargs = dict()
+        plugin_opts = loading.get_auth_plugin_conf_options(plugin_loader)
 
         (self._local_oslo_config or CONF).register_opts(plugin_opts,
                                                         group=group)
 
-        for opt in plugin_opts:
-            val = self._conf_get(opt.dest, group=group)
-            if val is not None:
-                val = opt.type(val)
-            plugin_kwargs[opt.dest] = val
-
-        return plugin_loader.load_from_options(**plugin_kwargs)
+        getter = lambda opt: self._conf_get(opt.dest, group=group)
+        return plugin_loader.load_from_options_getter(getter)
 
     def _determine_project(self):
         """Determine a project name from all available config sources.
@@ -1091,7 +1081,7 @@ class AuthProtocol(_BaseAuthProtocol):
             socket_timeout=self._conf_get('memcache_pool_socket_timeout'),
         )
 
-        if security_strategy:
+        if security_strategy.lower() != 'none':
             secret_key = self._conf_get('memcache_secret_key')
             return _cache.SecureTokenCache(self.log,
                                            security_strategy,
