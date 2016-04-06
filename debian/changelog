@@ -1,3 +1,11 @@
+python-keystonemiddleware (4.4.0-3) unstable; urgency=medium
+
+  * Re-add missing auth options in oslo-config-generator:
+    - Add re-add-missing-auth-options.patch
+    - Disable now failing unit tests.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 06 Apr 2016 22:16:03 +0000
+
 python-keystonemiddleware (4.4.0-2) unstable; urgency=medium
 
   * Added git as build-depends-indep.

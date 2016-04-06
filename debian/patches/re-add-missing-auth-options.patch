@@ -1,0 +1,18 @@
+Description: Re-add missing auth options
+ Upstream went a bit quick to remove Auth options from the default generated
+ config files.
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: no
+Last-Update: 2016-04-07
+
+--- python-keystonemiddleware-4.4.0.orig/keystonemiddleware/auth_token/__init__.py
++++ python-keystonemiddleware-4.4.0/keystonemiddleware/auth_token/__init__.py
+@@ -370,7 +370,7 @@ _OPTS = [
+                 ' only while migrating from a less secure algorithm to a more'
+                 ' secure one. Once all the old tokens are expired this option'
+                 ' should be set to a single value for better performance.'),
+-]
++] + _auth.OPTS
+ 
+ CONF = cfg.CONF
+ CONF.register_opts(_OPTS, group=_base.AUTHTOKEN_GROUP)
