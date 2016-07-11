@@ -162,7 +162,7 @@ _OPTS = [
                 ' only while migrating from a less secure algorithm to a more'
                 ' secure one. Once all the old tokens are expired this option'
                 ' should be set to a single value for better performance.'),
-]
+] + _auth.OPTS
 
 
 CONF = cfg.CONF

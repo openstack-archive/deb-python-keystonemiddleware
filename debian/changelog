@@ -10,6 +10,7 @@ python-keystonemiddleware (4.6.0-1) UNRELEASED; urgency=medium
   * d/gbp.conf: Update debian-branch for Newton.
   * .gitreview: Copy upstream version of file.
   * d/control: Align (Build-)Depends with upstream.
+  * d/patches/*: Rebased.
 
  -- Corey Bryant <corey.bryant@canonical.com>  Mon, 11 Jul 2016 09:27:27 -0400
 
