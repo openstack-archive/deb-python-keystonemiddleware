@@ -1,3 +1,9 @@
+python-keystonemiddleware (4.4.1-0ubuntu1) UNRELEASED; urgency=medium
+
+  * New upstream point release.
+
+ -- Corey Bryant <corey.bryant@canonical.com>  Mon, 11 Jul 2016 09:07:04 -0400
+
 python-keystonemiddleware (4.4.0-3) unstable; urgency=medium
 
   * Re-add missing auth options in oslo-config-generator:
