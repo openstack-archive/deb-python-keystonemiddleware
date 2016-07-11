@@ -1,6 +1,6 @@
-python-keystonemiddleware (4.4.1-0ubuntu1) UNRELEASED; urgency=medium
+python-keystonemiddleware (4.4.1-0ubuntu1) xenial; urgency=medium
 
-  * New upstream point release.
+  * New upstream point release (LP: #1533724).
 
  -- Corey Bryant <corey.bryant@canonical.com>  Mon, 11 Jul 2016 09:07:04 -0400
 
