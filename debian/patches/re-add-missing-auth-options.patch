@@ -7,12 +7,11 @@ Last-Update: 2016-04-07
 
 --- a/keystonemiddleware/auth_token/_opts.py
 +++ b/keystonemiddleware/auth_token/_opts.py
-@@ -162,7 +162,7 @@
-                 ' only while migrating from a less secure algorithm to a more'
-                 ' secure one. Once all the old tokens are expired this option'
-                 ' should be set to a single value for better performance.'),
--]
-+] + _auth.OPTS
+@@ -15,6 +15,7 @@
+ from keystoneauth1 import loading
+ from oslo_config import cfg
+ 
++from keystonemiddleware.auth_token import _auth
+ from keystonemiddleware.auth_token import _base
  
  
- CONF = cfg.CONF
