@@ -37,11 +37,12 @@ class ConnectionGetTimeoutException(Exception):
 
 
 class ConnectionPool(queue.Queue):
-    """Base connection pool class
+    """Base connection pool class.
 
     This class implements the basic connection pool logic as an abstract base
     class.
     """
+
     def __init__(self, maxsize, unused_timeout, conn_get_timeout=None):
         """Initialize the connection pool.
 

@@ -13,6 +13,7 @@
 # under the License.
 
 import os
+import uuid
 
 import fixtures
 from keystoneauth1 import fixture
@@ -105,6 +106,7 @@ class Examples(fixtures.Fixture):
             self.SIGNING_CERT = f.read()
 
         self.KERBEROS_BIND = 'USER@REALM'
+        self.SERVICE_KERBEROS_BIND = 'SERVICE_USER@SERVICE_REALM'
 
         self.SIGNING_KEY_FILE = os.path.join(KEYDIR, 'signing_key.pem')
         with open(self.SIGNING_KEY_FILE) as f:
@@ -127,7 +129,10 @@ class Examples(fixtures.Fixture):
         self.v3_UUID_TOKEN_UNKNOWN_BIND = '7ed9781b62cd4880b8d8c6788ab1d1e2'
 
         self.UUID_SERVICE_TOKEN_DEFAULT = 'fe4c0710ec2f492748596c1b53ab124'
+        self.UUID_SERVICE_TOKEN_BIND = '5e43439613d34a13a7e03b2762bd08ab'
         self.v3_UUID_SERVICE_TOKEN_DEFAULT = 'g431071bbc2f492748596c1b53cb229'
+        self.v3_UUID_SERVICE_TOKEN_BIND = 'be705e4426d0449a89e35ae21c380a05'
+        self.v3_NOT_IS_ADMIN_PROJECT = uuid.uuid4().hex
 
         revoked_token = self.REVOKED_TOKEN
         if isinstance(revoked_token, six.text_type):
@@ -321,6 +326,17 @@ class Examples(fixtures.Fixture):
         token['access']['token']['bind'] = {'kerberos': self.KERBEROS_BIND}
         self.TOKEN_RESPONSES[self.UUID_TOKEN_BIND] = token
 
+        token = fixture.V2Token(token_id=self.UUID_SERVICE_TOKEN_BIND,
+                                tenant_id=SERVICE_PROJECT_ID,
+                                tenant_name=SERVICE_PROJECT_NAME,
+                                user_id=SERVICE_USER_ID,
+                                user_name=SERVICE_USER_NAME)
+        token.add_role(SERVICE_ROLE_NAME1)
+        token.add_role(SERVICE_ROLE_NAME2)
+        token['access']['token']['bind'] = {
+            'kerberos': self.SERVICE_KERBEROS_BIND}
+        self.TOKEN_RESPONSES[self.UUID_SERVICE_TOKEN_BIND] = token
+
         token = fixture.V2Token(token_id=self.UUID_TOKEN_UNKNOWN_BIND,
                                 tenant_id=PROJECT_ID,
                                 tenant_name=PROJECT_NAME,
@@ -405,6 +421,21 @@ class Examples(fixtures.Fixture):
         token['token']['bind'] = {'kerberos': self.KERBEROS_BIND}
         self.TOKEN_RESPONSES[self.v3_UUID_TOKEN_BIND] = token
 
+        token = fixture.V3Token(user_id=SERVICE_USER_ID,
+                                user_name=SERVICE_USER_NAME,
+                                user_domain_id=SERVICE_DOMAIN_ID,
+                                user_domain_name=SERVICE_DOMAIN_NAME,
+                                project_id=SERVICE_PROJECT_ID,
+                                project_name=SERVICE_PROJECT_NAME,
+                                project_domain_id=SERVICE_DOMAIN_ID,
+                                project_domain_name=SERVICE_DOMAIN_NAME)
+        token.add_role(name=SERVICE_ROLE_NAME1)
+        token.add_role(name=SERVICE_ROLE_NAME2)
+        svc = token.add_service(self.SERVICE_TYPE)
+        svc.add_endpoint('public', self.SERVICE_URL)
+        token['token']['bind'] = {'kerberos': self.SERVICE_KERBEROS_BIND}
+        self.TOKEN_RESPONSES[self.v3_UUID_SERVICE_TOKEN_BIND] = token
+
         token = fixture.V3Token(user_id=USER_ID,
                                 user_name=USER_NAME,
                                 user_domain_id=DOMAIN_ID,
@@ -435,6 +466,21 @@ class Examples(fixtures.Fixture):
         svc = token.add_service(self.SERVICE_TYPE)
         svc.add_endpoint('public', self.SERVICE_URL)
         self.TOKEN_RESPONSES[self.v3_UUID_SERVICE_TOKEN_DEFAULT] = token
+
+        token = fixture.V3Token(user_id=USER_ID,
+                                user_name=USER_NAME,
+                                user_domain_id=DOMAIN_ID,
+                                user_domain_name=DOMAIN_NAME,
+                                project_id=PROJECT_ID,
+                                project_name=PROJECT_NAME,
+                                project_domain_id=DOMAIN_ID,
+                                project_domain_name=DOMAIN_NAME,
+                                is_admin_project=False)
+        token.add_role(name=ROLE_NAME1)
+        token.add_role(name=ROLE_NAME2)
+        svc = token.add_service(self.SERVICE_TYPE)
+        svc.add_endpoint('public', self.SERVICE_URL)
+        self.TOKEN_RESPONSES[self.v3_NOT_IS_ADMIN_PROJECT] = token
 
         # PKIZ tokens generally link to above tokens
 

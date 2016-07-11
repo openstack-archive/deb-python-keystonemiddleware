@@ -29,7 +29,8 @@ def _v3_to_v2_catalog(catalog):
         v2_service = {'type': v3_service['type']}
         try:
             v2_service['name'] = v3_service['name']
-        except KeyError:
+        except KeyError:  # nosec
+            # v3 service doesn't have a name, so v2_service doesn't either.
             pass
 
         # now convert the endpoints. Because in v3 we specify region per
@@ -51,6 +52,15 @@ def _v3_to_v2_catalog(catalog):
         v2_services.append(v2_service)
 
     return v2_services
+
+
+def _is_admin_project(auth_ref):
+    """Return an appropriate header value for X-Is-Admin-Project.
+
+    Headers must be strings so we can't simply pass a boolean value through so
+    return a True or False string to signal the admin project.
+    """
+    return 'True' if auth_ref.is_admin_project else 'False'
 
 
 # NOTE(jamielennox): this should probably be moved into its own file, but at
@@ -84,6 +94,8 @@ class _AuthTokenRequest(webob.Request):
 
     _USER_STATUS_HEADER = 'X-Identity-Status'
     _SERVICE_STATUS_HEADER = 'X-Service-Identity-Status'
+
+    _ADMIN_PROJECT_HEADER = 'X-Is-Admin-Project'
 
     _SERVICE_CATALOG_HEADER = 'X-Service-Catalog'
     _TOKEN_AUTH = 'keystone.token_auth'
@@ -154,6 +166,7 @@ class _AuthTokenRequest(webob.Request):
         doc info at start of __init__ file for details of headers to be defined
         """
         self._set_auth_headers(auth_ref, self._USER_HEADER_PREFIX)
+        self.headers[self._ADMIN_PROJECT_HEADER] = _is_admin_project(auth_ref)
 
         for k, v in six.iteritems(self._DEPRECATED_HEADER_MAP):
             self.headers[k] = self.headers[v]
@@ -187,10 +200,11 @@ class _AuthTokenRequest(webob.Request):
         self._set_auth_headers(auth_ref, self._SERVICE_HEADER_PREFIX)
 
     def _all_auth_headers(self):
-        """All the authentication headers that can be set on the request"""
+        """All the authentication headers that can be set on the request."""
         yield self._SERVICE_CATALOG_HEADER
         yield self._USER_STATUS_HEADER
         yield self._SERVICE_STATUS_HEADER
+        yield self._ADMIN_PROJECT_HEADER
 
         for header in self._DEPRECATED_HEADER_MAP:
             yield header
@@ -226,7 +240,7 @@ class _AuthTokenRequest(webob.Request):
 
     @property
     def token_auth(self):
-        """The auth plugin that will be associated with this request"""
+        """The auth plugin that will be associated with this request."""
         return self.environ.get(self._TOKEN_AUTH)
 
     @token_auth.setter
@@ -235,7 +249,7 @@ class _AuthTokenRequest(webob.Request):
 
     @property
     def token_info(self):
-        """The raw token dictionary retrieved by the middleware"""
+        """The raw token dictionary retrieved by the middleware."""
         return self.environ.get(self._TOKEN_INFO)
 
     @token_info.setter

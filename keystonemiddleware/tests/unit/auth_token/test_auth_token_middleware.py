@@ -29,10 +29,9 @@ from keystoneauth1 import session
 from keystoneclient.common import cms
 from keystoneclient import exceptions as ksc_exceptions
 import mock
-from oslo_config import cfg
 from oslo_serialization import jsonutils
 from oslo_utils import timeutils
-from oslotest import createfile
+import pbr.version
 import six
 import testresources
 import testtools
@@ -56,6 +55,7 @@ EXPECTED_V2_DEFAULT_ENV_RESPONSE = {
     'HTTP_X_USER_ID': 'user_id1',
     'HTTP_X_USER_NAME': 'user_name1',
     'HTTP_X_ROLES': 'role1,role2',
+    'HTTP_X_IS_ADMIN_PROJECT': 'True',
     'HTTP_X_USER': 'user_name1',  # deprecated (diablo-compat)
     'HTTP_X_TENANT': 'tenant_name1',  # deprecated (diablo-compat)
     'HTTP_X_ROLE': 'role1,role2',  # deprecated (diablo-compat)
@@ -75,6 +75,7 @@ EXPECTED_V3_DEFAULT_ENV_ADDITIONS = {
     'HTTP_X_PROJECT_DOMAIN_NAME': 'domain_name1',
     'HTTP_X_USER_DOMAIN_ID': 'domain_id1',
     'HTTP_X_USER_DOMAIN_NAME': 'domain_name1',
+    'HTTP_X_IS_ADMIN_PROJECT': 'True'
 }
 
 EXPECTED_V3_DEFAULT_SERVICE_ENV_ADDITIONS = {
@@ -264,9 +265,11 @@ class BaseAuthTokenMiddlewareTest(base.BaseAuthTokenTestCase):
     this to specify, for instance, v3 format.
 
     """
+
     def setUp(self, expected_env=None, auth_version=None, fake_app=None):
         super(BaseAuthTokenMiddlewareTest, self).setUp()
 
+        self.logger = self.useFixture(fixtures.FakeLogger(level=logging.DEBUG))
         self.expected_env = expected_env or dict()
         self.fake_app = fake_app or FakeApp
         self.middleware = None
@@ -496,7 +499,7 @@ class GeneralAuthTokenMiddlewareTest(BaseAuthTokenMiddlewareTest,
         self.assertEqual(datetime.timedelta(seconds=24),
                          middleware._revocations._cache_timeout)
         self.assertEqual(False, middleware._include_service_catalog)
-        self.assertEqual('0', middleware._conf['nonexsit_option'])
+        self.assertEqual('0', middleware._conf.get('nonexsit_option'))
 
     def test_deprecated_conf_values(self):
         servers = 'localhost:11211'
@@ -506,7 +509,7 @@ class GeneralAuthTokenMiddlewareTest(BaseAuthTokenMiddlewareTest,
         }
 
         middleware = auth_token.AuthProtocol(self.fake_app, conf)
-        self.assertEqual([servers], middleware._conf_get('memcached_servers'))
+        self.assertEqual([servers], middleware._conf.get('memcached_servers'))
 
     def test_conf_values_type_convert_with_wrong_value(self):
         conf = {
@@ -1000,8 +1003,25 @@ class CommonAuthTokenMiddlewareTest(object):
         token = 'invalid-token'
         self.call_middleware(headers={'X-Auth-Token': token},
                              expected_status=401)
-        self.assertRaises(ksm_exceptions.InvalidToken,
-                          self._get_cached_token, token)
+        self.assertEqual(auth_token._CACHE_INVALID_INDICATOR,
+                         self._get_cached_token(token))
+
+    def test_memcache_hit_invalid_token(self):
+        token = 'invalid-token'
+        invalid_uri = '%s/v2.0/tokens/invalid-token' % BASE_URI
+        self.requests_mock.get(invalid_uri, status_code=404)
+
+        # Call once to cache token's invalid state; verify it cached as such
+        self.call_middleware(headers={'X-Auth-Token': token},
+                             expected_status=401)
+        self.assertEqual(auth_token._CACHE_INVALID_INDICATOR,
+                         self._get_cached_token(token))
+
+        # Call again for a cache hit; verify it detected as cached and invalid
+        self.call_middleware(headers={'X-Auth-Token': token},
+                             expected_status=401)
+        self.assertIn('Cached token is marked unauthorized',
+                      self.logger.output)
 
     def test_memcache_set_expired(self, extra_conf={}, extra_environ={}):
         token_cache_time = 10
@@ -1511,7 +1531,7 @@ class v2AuthTokenMiddlewareTest(BaseAuthTokenMiddlewareTest,
         self.set_middleware()
 
     def assert_unscoped_default_tenant_auto_scopes(self, token):
-        """Unscoped v2 requests with a default tenant should "auto-scope."
+        """Unscoped v2 requests with a default tenant should ``auto-scope``.
 
         The implied scope is the user's tenant ID.
 
@@ -1825,8 +1845,16 @@ class v3AuthTokenMiddlewareTest(BaseAuthTokenMiddlewareTest,
         now = datetime.datetime.utcnow()
         delta = datetime.timedelta(hours=1)
         expires = strtime(at=(now + delta))
-        self.middleware._token_cache.store(token, (data, expires))
-        self.assertEqual(self.middleware._token_cache.get(token), data)
+        self.middleware._token_cache.set(token, (data, expires))
+        new_data = self.middleware.fetch_token(token)
+        self.assertEqual(data, new_data)
+
+    def test_not_is_admin_project(self):
+        token = self.examples.v3_NOT_IS_ADMIN_PROJECT
+        self.set_middleware(expected_env={'HTTP_X_IS_ADMIN_PROJECT': 'False'})
+        req = self.assert_valid_request_200(token)
+        self.assertIs(False,
+                      req.environ['keystone.token_auth'].user.is_admin_project)
 
 
 class DelayedAuthTests(BaseAuthTokenMiddlewareTest):
@@ -1925,7 +1953,8 @@ class CommonCompositeAuthTests(object):
         resp = self.call_middleware(headers={'X-Auth-Token': token,
                                              'X-Service-Token': service_token},
                                     expected_status=401)
-        self.assertEqual(b'Authentication required', resp.body)
+        expected_body = b'The request you have made requires authentication.'
+        self.assertThat(resp.body, matchers.Contains(expected_body))
 
     def test_composite_auth_no_service_token(self):
         self.purge_service_token_expected_env()
@@ -1952,13 +1981,15 @@ class CommonCompositeAuthTests(object):
         resp = self.call_middleware(headers={'X-Auth-Token': token,
                                              'X-Service-Token': service_token},
                                     expected_status=401)
-        self.assertEqual(b'Authentication required', resp.body)
+        expected_body = b'The request you have made requires authentication.'
+        self.assertThat(resp.body, matchers.Contains(expected_body))
 
     def test_composite_auth_no_user_token(self):
         service_token = self.token_dict['uuid_service_token_default']
         resp = self.call_middleware(headers={'X-Service-Token': service_token},
                                     expected_status=401)
-        self.assertEqual(b'Authentication required', resp.body)
+        expected_body = b'The request you have made requires authentication.'
+        self.assertThat(resp.body, matchers.Contains(expected_body))
 
     def test_composite_auth_delay_ok(self):
         self.middleware._delay_auth_decision = True
@@ -2049,6 +2080,35 @@ class CommonCompositeAuthTests(object):
                                     expected_status=403)
         self.assertEqual(FakeApp.FORBIDDEN, resp.body)
 
+    def assert_kerberos_composite_bind(self, user_token, service_token,
+                                       bind_level):
+        conf = {
+            'enforce_token_bind': bind_level,
+            'auth_version': self.auth_version,
+        }
+        self.set_middleware(conf=conf)
+
+        req = webob.Request.blank('/')
+        req.headers['X-Auth-Token'] = user_token
+        req.headers['X-Service-Token'] = service_token
+
+        req.environ['REMOTE_USER'] = self.examples.SERVICE_KERBEROS_BIND
+        req.environ['AUTH_TYPE'] = 'Negotiate'
+
+        resp = req.get_response(self.middleware)
+
+        self.assertEqual(200, resp.status_int)
+        self.assertEqual(FakeApp.SUCCESS, resp.body)
+        self.assertIn('keystone.token_info', req.environ)
+
+    def test_composite_auth_with_bind(self):
+        token = self.token_dict['uuid_token_bind']
+        service_token = self.token_dict['uuid_service_token_bind']
+
+        self.assert_kerberos_composite_bind(token,
+                                            service_token,
+                                            bind_level='required')
+
 
 class v2CompositeAuthTests(BaseAuthTokenMiddlewareTest,
                            CommonCompositeAuthTests,
@@ -2069,9 +2129,13 @@ class v2CompositeAuthTests(BaseAuthTokenMiddlewareTest,
 
         uuid_token_default = self.examples.UUID_TOKEN_DEFAULT
         uuid_service_token_default = self.examples.UUID_SERVICE_TOKEN_DEFAULT
+        uuid_token_bind = self.examples.UUID_TOKEN_BIND
+        uuid_service_token_bind = self.examples.UUID_SERVICE_TOKEN_BIND
         self.token_dict = {
             'uuid_token_default': uuid_token_default,
             'uuid_service_token_default': uuid_service_token_default,
+            'uuid_token_bind': uuid_token_bind,
+            'uuid_service_token_bind': uuid_service_token_bind,
         }
 
         self.requests_mock.get(BASE_URI,
@@ -2086,7 +2150,9 @@ class v2CompositeAuthTests(BaseAuthTokenMiddlewareTest,
                                status_code=200)
 
         for token in (self.examples.UUID_TOKEN_DEFAULT,
-                      self.examples.UUID_SERVICE_TOKEN_DEFAULT,):
+                      self.examples.UUID_SERVICE_TOKEN_DEFAULT,
+                      self.examples.UUID_TOKEN_BIND,
+                      self.examples.UUID_SERVICE_TOKEN_BIND):
             text = self.examples.JSON_TOKEN_RESPONSES[token]
             self.requests_mock.get('%s/v2.0/tokens/%s' % (BASE_URI, token),
                                    text=text)
@@ -2120,9 +2186,13 @@ class v3CompositeAuthTests(BaseAuthTokenMiddlewareTest,
 
         uuid_token_default = self.examples.v3_UUID_TOKEN_DEFAULT
         uuid_serv_token_default = self.examples.v3_UUID_SERVICE_TOKEN_DEFAULT
+        uuid_token_bind = self.examples.v3_UUID_TOKEN_BIND
+        uuid_service_token_bind = self.examples.v3_UUID_SERVICE_TOKEN_BIND
         self.token_dict = {
             'uuid_token_default': uuid_token_default,
             'uuid_service_token_default': uuid_serv_token_default,
+            'uuid_token_bind': uuid_token_bind,
+            'uuid_service_token_bind': uuid_service_token_bind,
         }
 
         self.requests_mock.get(BASE_URI, json=VERSION_LIST_v3, status_code=300)
@@ -2417,126 +2487,69 @@ class TestAuthPluginUserAgentGeneration(BaseAuthTokenMiddlewareTest):
         ksm_version = uuid.uuid4().hex
         conf = {'username': self.username, 'auth_url': self.auth_url}
 
-        app = self._create_app(conf, ksm_version)
+        app = self._create_app(conf, '', ksm_version)
         self._assert_user_agent(app, '', ksm_version)
 
     def test_project_in_configuration(self):
         project = uuid.uuid4().hex
         project_version = uuid.uuid4().hex
+        ksm_version = uuid.uuid4().hex
 
         conf = {'username': self.username,
                 'auth_url': self.auth_url,
                 'project': project}
-        app = self._create_app(conf, project_version)
+        app = self._create_app(conf, project_version, ksm_version)
         project_with_version = '{0}/{1} '.format(project, project_version)
-        self._assert_user_agent(app, project_with_version, project_version)
+        self._assert_user_agent(app, project_with_version, ksm_version)
+
+    def test_project_not_installed_results_in_unknown_version(self):
+        project = uuid.uuid4().hex
+
+        conf = {'username': self.username,
+                'auth_url': self.auth_url,
+                'project': project}
+
+        v = pbr.version.VersionInfo('keystonemiddleware').version_string()
+
+        app = self.create_simple_middleware(conf=conf, use_global_conf=True)
+        project_with_version = '{0}/{1} '.format(project, 'unknown')
+        self._assert_user_agent(app, project_with_version, v)
 
     def test_project_in_oslo_configuration(self):
         project = uuid.uuid4().hex
         project_version = uuid.uuid4().hex
+        ksm_version = uuid.uuid4().hex
 
         conf = {'username': self.username, 'auth_url': self.auth_url}
-        with mock.patch.object(cfg.CONF, 'project', new=project, create=True):
-            app = self._create_app(conf, project_version)
+        with mock.patch.object(self.cfg.conf, 'project',
+                               new=project, create=True):
+            app = self._create_app(conf, project_version, ksm_version)
         project = '{0}/{1} '.format(project, project_version)
-        self._assert_user_agent(app, project, project_version)
+        self._assert_user_agent(app, project, ksm_version)
 
-    def _create_app(self, conf, project_version):
+    def _create_app(self, conf, project_version, ksm_version):
         fake_pkg_resources = mock.Mock()
         fake_pkg_resources.get_distribution().version = project_version
 
+        fake_version_info = mock.Mock()
+        fake_version_info.version_string.return_value = ksm_version
+        fake_pbr_version = mock.Mock()
+        fake_pbr_version.VersionInfo.return_value = fake_version_info
+
         body = uuid.uuid4().hex
-        with mock.patch('keystonemiddleware.auth_token.pkg_resources',
+
+        at_pbr = 'keystonemiddleware._common.config.pbr.version'
+
+        with mock.patch('keystonemiddleware._common.config.pkg_resources',
                         new=fake_pkg_resources):
-            return self.create_simple_middleware(body=body, conf=conf,
-                                                 use_global_conf=True)
+            with mock.patch(at_pbr, new=fake_pbr_version):
+                return self.create_simple_middleware(body=body, conf=conf)
 
     def _assert_user_agent(self, app, project, ksm_version):
         sess = app._identity_server._adapter.session
         expected_ua = ('{0}keystonemiddleware.auth_token/{1}'
                        .format(project, ksm_version))
         self.assertThat(sess.user_agent, matchers.StartsWith(expected_ua))
-
-
-class TestAuthPluginLocalOsloConfig(BaseAuthTokenMiddlewareTest):
-
-    def setUp(self):
-        super(TestAuthPluginLocalOsloConfig, self).setUp()
-        self.project = uuid.uuid4().hex
-
-        # NOTE(cdent): The options below are selected from those
-        # which are statically registered by auth_token middleware
-        # in the 'keystone_authtoken' group. Additional options, from
-        # plugins, are registered dynamically so must not be used here.
-        self.oslo_options = {
-            'auth_uri': uuid.uuid4().hex,
-            'identity_uri': uuid.uuid4().hex,
-        }
-
-        self.local_oslo_config = cfg.ConfigOpts()
-        self.local_oslo_config.register_group(cfg.OptGroup(
-            name='keystone_authtoken'))
-        self.local_oslo_config.register_opts(auth_token._OPTS,
-                                             group='keystone_authtoken')
-        self.local_oslo_config.register_opts(auth_token._auth.OPTS,
-                                             group='keystone_authtoken')
-        for option, value in self.oslo_options.items():
-            self.local_oslo_config.set_override(option, value,
-                                                'keystone_authtoken')
-        self.local_oslo_config(args=[], project=self.project)
-
-        self.file_options = {
-            'auth_type': 'password',
-            'auth_uri': uuid.uuid4().hex,
-            'password': uuid.uuid4().hex,
-        }
-
-        content = ("[keystone_authtoken]\n"
-                   "auth_type=%(auth_type)s\n"
-                   "auth_uri=%(auth_uri)s\n"
-                   "auth_url=%(auth_uri)s\n"
-                   "password=%(password)s\n" % self.file_options)
-        self.conf_file_fixture = self.useFixture(
-            createfile.CreateFileWithContent(self.project, content))
-
-    def test_project_in_local_oslo_configuration(self):
-        conf = {'oslo_config_project': self.project,
-                'oslo_config_file': self.conf_file_fixture.path}
-        app = self._create_app(conf, uuid.uuid4().hex)
-        for option in self.file_options:
-            self.assertEqual(self.file_options[option],
-                             app._conf_get(option), option)
-
-    def test_passed_oslo_configuration(self):
-        conf = {'oslo_config_config': self.local_oslo_config}
-        app = self._create_app(conf, uuid.uuid4().hex)
-        for option in self.oslo_options:
-            self.assertEqual(self.oslo_options[option],
-                             app._conf_get(option))
-
-    def test_passed_olso_configuration_wins(self):
-        """oslo_config_config has precedence over oslo_config_project."""
-        conf = {'oslo_config_project': self.project,
-                'oslo_config_config': self.local_oslo_config,
-                'oslo_config_file': self.conf_file_fixture.path}
-        app = self._create_app(conf, uuid.uuid4().hex)
-        for option in self.oslo_options:
-            self.assertEqual(self.oslo_options[option],
-                             app._conf_get(option))
-        self.assertNotEqual(self.file_options['auth_uri'],
-                            app._conf_get('auth_uri'))
-
-    def _create_app(self, conf, project_version):
-        fake_pkg_resources = mock.Mock()
-        fake_pkg_resources.get_distribution().version = project_version
-
-        body = uuid.uuid4().hex
-        with mock.patch('keystonemiddleware.auth_token.pkg_resources',
-                        new=fake_pkg_resources):
-            # use_global_conf is poorly named. What it means is
-            # don't use the config created in test setUp.
-            return self.create_simple_middleware(body=body, conf=conf,
-                                                 use_global_conf=True)
 
 
 def load_tests(loader, tests, pattern):

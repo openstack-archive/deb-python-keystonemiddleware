@@ -1,9 +1,8 @@
-#
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
 # a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#      http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -11,29 +10,11 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-"""
-Build open standard audit information based on incoming requests
-
-AuditMiddleware filter should be placed after keystonemiddleware.auth_token
-in the pipeline so that it can utilise the information the Identity server
-provides.
-"""
-
 import ast
 import collections
-import functools
 import logging
-import os.path
 import re
-import sys
 
-from oslo_config import cfg
-from oslo_context import context
-try:
-    import oslo_messaging
-    messaging = True
-except ImportError:
-    messaging = False
 from pycadf import cadftaxonomy as taxonomy
 from pycadf import cadftype
 from pycadf import credential
@@ -41,31 +22,23 @@ from pycadf import endpoint
 from pycadf import eventfactory as factory
 from pycadf import host
 from pycadf import identifier
-from pycadf import reason
-from pycadf import reporterstep
 from pycadf import resource
 from pycadf import tag
-from pycadf import timestamp
 import six
 from six.moves import configparser
 from six.moves.urllib import parse as urlparse
-import webob.dec
 
-from keystonemiddleware.i18n import _LE, _LI
-
-
-_LOG = None
+from keystonemiddleware.i18n import _LW
 
 
-def _log_and_ignore_error(fn):
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except Exception as e:
-            _LOG.exception(_LE('An exception occurred processing '
-                               'the API call: %s '), e)
-    return wrapper
+# NOTE(blk-u): Compatibility for Python 2. SafeConfigParser and
+# SafeConfigParser.readfp are deprecated in Python 3. Remove this when we drop
+# support for Python 2.
+if six.PY2:
+    class _ConfigParser(configparser.SafeConfigParser):
+        read_file = configparser.SafeConfigParser.readfp
+else:
+    _ConfigParser = configparser.ConfigParser
 
 
 Service = collections.namedtuple('Service',
@@ -80,19 +53,29 @@ AuditMap = collections.namedtuple('AuditMap',
                                    'default_target_endpoint_type'])
 
 
-# NOTE(blk-u): Compatibility for Python 2. SafeConfigParser and
-# SafeConfigParser.readfp are deprecated in Python 3. Remove this when we drop
-# support for Python 2.
-if six.PY2:
-    class _ConfigParser(configparser.SafeConfigParser):
-        read_file = configparser.SafeConfigParser.readfp
-else:
-    _ConfigParser = configparser.ConfigParser
+class PycadfAuditApiConfigError(Exception):
+    """Error raised when pyCADF fails to configure correctly."""
+
+    pass
+
+
+class ClientResource(resource.Resource):
+    def __init__(self, project_id=None, **kwargs):
+        super(ClientResource, self).__init__(**kwargs)
+        if project_id is not None:
+            self.project_id = project_id
+
+
+class KeystoneCredential(credential.Credential):
+    def __init__(self, identity_status=None, **kwargs):
+        super(KeystoneCredential, self).__init__(**kwargs)
+        if identity_status is not None:
+            self.identity_status = identity_status
 
 
 class OpenStackAuditApi(object):
 
-    def __init__(self, cfg_file):
+    def __init__(self, cfg_file, log=logging.getLogger(__name__)):
         """Configure to recognize and map known api paths."""
         path_kw = {}
         custom_actions = {}
@@ -107,26 +90,33 @@ class OpenStackAuditApi(object):
                 try:
                     default_target_endpoint_type = map_conf.get(
                         'DEFAULT', 'target_endpoint_type')
-                except configparser.NoOptionError:
+                except configparser.NoOptionError:  # nosec
+                    # Ignore the undefined config option,
+                    # default_target_endpoint_type remains None which is valid.
                     pass
 
                 try:
                     custom_actions = dict(map_conf.items('custom_actions'))
-                except configparser.Error:
+                except configparser.Error:  # nosec
+                    # custom_actions remains {} which is valid.
                     pass
 
                 try:
                     path_kw = dict(map_conf.items('path_keywords'))
-                except configparser.Error:
+                except configparser.Error:  # nosec
+                    # path_kw remains {} which is valid.
                     pass
 
                 try:
                     endpoints = dict(map_conf.items('service_endpoints'))
-                except configparser.Error:
+                except configparser.Error:  # nosec
+                    # endpoints remains {} which is valid.
                     pass
             except configparser.ParsingError as err:
                 raise PycadfAuditApiConfigError(
                     'Error parsing audit map file: %s' % err)
+
+        self._log = log
         self._MAP = AuditMap(
             path_kw=path_kw, custom_actions=custom_actions,
             service_endpoints=endpoints,
@@ -218,7 +208,7 @@ class OpenStackAuditApi(object):
         return service
 
     def _build_typeURI(self, req, service_type):
-        """Build typeURI of target
+        """Build typeURI of target.
 
         Combines service type and corresponding path for greater detail.
         """
@@ -249,7 +239,7 @@ class OpenStackAuditApi(object):
         return target
 
     def get_target_resource(self, req):
-        """Retrieve target information
+        """Retrieve target information.
 
         If discovery is enabled, target will attempt to retrieve information
         from service catalog. If not, the information will be taken from
@@ -258,13 +248,20 @@ class OpenStackAuditApi(object):
         service_info = Service(type=taxonomy.UNKNOWN, name=taxonomy.UNKNOWN,
                                id=taxonomy.UNKNOWN, admin_endp=None,
                                private_endp=None, public_endp=None)
+
+        catalog = {}
         try:
             catalog = ast.literal_eval(
                 req.environ['HTTP_X_SERVICE_CATALOG'])
         except KeyError:
-            raise PycadfAuditApiConfigError(
-                'Service catalog is missing. '
-                'Cannot discover target information')
+            msg = _LW('Unable to discover target information because '
+                      'service catalog is missing. Either the incoming '
+                      'request does not contain an auth token or auth '
+                      'token does not contain a service catalog. For '
+                      'the latter, please make sure the '
+                      '"include_service_catalog" property in '
+                      'auth_token middleware is set to "True"')
+            self._log.warning(msg)
 
         default_endpoint = None
         for endp in catalog:
@@ -286,93 +283,21 @@ class OpenStackAuditApi(object):
                 service_info = self._get_service_info(default_endpoint)
         return self._build_target(req, service_info)
 
-
-class ClientResource(resource.Resource):
-    def __init__(self, project_id=None, **kwargs):
-        super(ClientResource, self).__init__(**kwargs)
-        if project_id is not None:
-            self.project_id = project_id
-
-
-class KeystoneCredential(credential.Credential):
-    def __init__(self, identity_status=None, **kwargs):
-        super(KeystoneCredential, self).__init__(**kwargs)
-        if identity_status is not None:
-            self.identity_status = identity_status
-
-
-class PycadfAuditApiConfigError(Exception):
-    """Error raised when pyCADF fails to configure correctly."""
-
-
-class AuditMiddleware(object):
-    """Create an audit event based on request/response.
-
-    The audit middleware takes in various configuration options such as the
-    ability to skip audit of certain requests. The full list of options can
-    be discovered here:
-    http://docs.openstack.org/developer/keystonemiddleware/audit.html
-    """
-
-    @staticmethod
-    def _get_aliases(proj):
-        aliases = {}
-        if proj:
-            # Aliases to support backward compatibility
-            aliases = {
-                '%s.openstack.common.rpc.impl_kombu' % proj: 'rabbit',
-                '%s.openstack.common.rpc.impl_qpid' % proj: 'qpid',
-                '%s.openstack.common.rpc.impl_zmq' % proj: 'zmq',
-                '%s.rpc.impl_kombu' % proj: 'rabbit',
-                '%s.rpc.impl_qpid' % proj: 'qpid',
-                '%s.rpc.impl_zmq' % proj: 'zmq',
-            }
-        return aliases
-
-    def __init__(self, app, **conf):
-        self._application = app
-        global _LOG
-        _LOG = logging.getLogger(conf.get('log_name', __name__))
-        self._service_name = conf.get('service_name')
-        self._ignore_req_list = [x.upper().strip() for x in
-                                 conf.get('ignore_req_list', '').split(',')]
-        self._cadf_audit = OpenStackAuditApi(conf.get('audit_map_file'))
-
-        transport_aliases = self._get_aliases(cfg.CONF.project)
-        if messaging:
-            self._notifier = oslo_messaging.Notifier(
-                oslo_messaging.get_transport(cfg.CONF,
-                                             aliases=transport_aliases),
-                os.path.basename(sys.argv[0]))
-
-    def _emit_audit(self, context, event_type, payload):
-        """Emit audit notification
-
-        if oslo.messaging enabled, send notification. if not, log event.
-        """
-
-        if messaging:
-            self._notifier.info(context, event_type, payload)
-        else:
-            _LOG.info(_LI('Event type: %(event_type)s, Context: %(context)s, '
-                          'Payload: %(payload)s'), {'context': context,
-                                                    'event_type': event_type,
-                                                    'payload': payload})
-
     def _create_event(self, req):
         correlation_id = identifier.generate_uuid()
-        action = self._cadf_audit.get_action(req)
+        action = self.get_action(req)
 
         initiator = ClientResource(
             typeURI=taxonomy.ACCOUNT_USER,
-            id=req.environ['HTTP_X_USER_ID'],
-            name=req.environ['HTTP_X_USER_NAME'],
+            id=req.environ.get('HTTP_X_USER_ID', taxonomy.UNKNOWN),
+            name=req.environ.get('HTTP_X_USER_NAME', taxonomy.UNKNOWN),
             host=host.Host(address=req.client_addr, agent=req.user_agent),
             credential=KeystoneCredential(
-                token=req.environ['HTTP_X_AUTH_TOKEN'],
-                identity_status=req.environ['HTTP_X_IDENTITY_STATUS']),
-            project_id=req.environ['HTTP_X_PROJECT_ID'])
-        target = self._cadf_audit.get_target_resource(req)
+                token=req.environ.get('HTTP_X_AUTH_TOKEN', ''),
+                identity_status=req.environ.get('HTTP_X_IDENTITY_STATUS',
+                                                taxonomy.UNKNOWN)),
+            project_id=req.environ.get('HTTP_X_PROJECT_ID', taxonomy.UNKNOWN))
+        target = self.get_target_resource(req)
 
         event = factory.EventFactory().new_event(
             eventType=cadftype.EVENTTYPE_ACTIVITY,
@@ -384,65 +309,4 @@ class AuditMiddleware(object):
         event.requestPath = req.path_qs
         event.add_tag(tag.generate_name_value_tag('correlation_id',
                                                   correlation_id))
-        # cache model in request to allow tracking of transistive steps.
-        req.environ['cadf_event'] = event
         return event
-
-    @_log_and_ignore_error
-    def _process_request(self, request):
-        event = self._create_event(request)
-
-        self._emit_audit(context.get_admin_context().to_dict(),
-                         'audit.http.request', event.as_dict())
-
-    @_log_and_ignore_error
-    def _process_response(self, request, response=None):
-        # NOTE(gordc): handle case where error processing request
-        if 'cadf_event' not in request.environ:
-            self._create_event(request)
-        event = request.environ['cadf_event']
-
-        if response:
-            if response.status_int >= 200 and response.status_int < 400:
-                result = taxonomy.OUTCOME_SUCCESS
-            else:
-                result = taxonomy.OUTCOME_FAILURE
-            event.reason = reason.Reason(
-                reasonType='HTTP', reasonCode=str(response.status_int))
-        else:
-            result = taxonomy.UNKNOWN
-
-        event.outcome = result
-        event.add_reporterstep(
-            reporterstep.Reporterstep(
-                role=cadftype.REPORTER_ROLE_MODIFIER,
-                reporter=resource.Resource(id='target'),
-                reporterTime=timestamp.get_utc_now()))
-
-        self._emit_audit(context.get_admin_context().to_dict(),
-                         'audit.http.response', event.as_dict())
-
-    @webob.dec.wsgify
-    def __call__(self, req):
-        if req.method in self._ignore_req_list:
-            return req.get_response(self._application)
-
-        self._process_request(req)
-        try:
-            response = req.get_response(self._application)
-        except Exception:
-            self._process_response(req)
-            raise
-        else:
-            self._process_response(req, response)
-        return response
-
-
-def filter_factory(global_conf, **local_conf):
-    """Returns a WSGI filter app for use with paste.deploy."""
-    conf = global_conf.copy()
-    conf.update(local_conf)
-
-    def audit_filter(app):
-        return AuditMiddleware(app, **conf)
-    return audit_filter

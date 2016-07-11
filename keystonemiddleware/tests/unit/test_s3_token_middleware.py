@@ -30,6 +30,7 @@ GOOD_RESPONSE = {'access': {'token': {'id': 'TOKEN_ID',
 
 class FakeApp(object):
     """This represents a WSGI app protected by the auth_token middleware."""
+
     def __call__(self, env, start_response):
         resp = webob.Response()
         resp.environ = env
@@ -38,20 +39,14 @@ class FakeApp(object):
 
 class S3TokenMiddlewareTestBase(utils.TestCase):
 
-    TEST_PROTOCOL = 'https'
-    TEST_HOST = 'fakehost'
-    TEST_PORT = 35357
-    TEST_URL = '%s://%s:%d/v2.0/s3tokens' % (TEST_PROTOCOL,
-                                             TEST_HOST,
-                                             TEST_PORT)
+    TEST_AUTH_URI = 'https://fakehost/identity'
+    TEST_URL = '%s/v2.0/s3tokens' % (TEST_AUTH_URI, )
 
     def setUp(self):
         super(S3TokenMiddlewareTestBase, self).setUp()
 
         self.conf = {
-            'auth_host': self.TEST_HOST,
-            'auth_port': self.TEST_PORT,
-            'auth_protocol': self.TEST_PROTOCOL,
+            'auth_uri': self.TEST_AUTH_URI,
         }
 
         self.requests_mock = self.useFixture(rm_fixture.Fixture())
@@ -100,14 +95,17 @@ class S3TokenMiddlewareTestGood(S3TokenMiddlewareTestBase):
         self.assertEqual(req.headers['X-Auth-Token'], 'TOKEN_ID')
 
     def test_authorized_http(self):
-        self.requests_mock.post(self.TEST_URL.replace('https', 'http'),
-                                status_code=201,
-                                json=GOOD_RESPONSE)
+        protocol = 'http'
+        host = 'fakehost'
+        port = 35357
+        self.requests_mock.post(
+            '%s://%s:%s/v2.0/s3tokens' % (protocol, host, port),
+            status_code=201, json=GOOD_RESPONSE)
 
         self.middleware = (
-            s3_token.filter_factory({'auth_protocol': 'http',
-                                     'auth_host': self.TEST_HOST,
-                                     'auth_port': self.TEST_PORT})(FakeApp()))
+            s3_token.filter_factory({'auth_protocol': protocol,
+                                     'auth_host': host,
+                                     'auth_port': port})(FakeApp()))
         req = webob.Request.blank('/v1/AUTH_cfa/c/o')
         req.headers['Authorization'] = 'access:signature'
         req.headers['X-Storage-Token'] = 'token'
@@ -227,42 +225,3 @@ class S3TokenMiddlewareTestBad(S3TokenMiddlewareTestBase):
         s3_invalid_req = self.middleware._deny_request('InvalidURI')
         self.assertEqual(resp.body, s3_invalid_req.body)
         self.assertEqual(resp.status_int, s3_invalid_req.status_int)
-
-
-class S3TokenMiddlewareTestUtil(utils.BaseTestCase):
-    def test_split_path_failed(self):
-        self.assertRaises(ValueError, s3_token._split_path, '')
-        self.assertRaises(ValueError, s3_token._split_path, '/')
-        self.assertRaises(ValueError, s3_token._split_path, '//')
-        self.assertRaises(ValueError, s3_token._split_path, '//a')
-        self.assertRaises(ValueError, s3_token._split_path, '/a/c')
-        self.assertRaises(ValueError, s3_token._split_path, '//c')
-        self.assertRaises(ValueError, s3_token._split_path, '/a/c/')
-        self.assertRaises(ValueError, s3_token._split_path, '/a//')
-        self.assertRaises(ValueError, s3_token._split_path, '/a', 2)
-        self.assertRaises(ValueError, s3_token._split_path, '/a', 2, 3)
-        self.assertRaises(ValueError, s3_token._split_path, '/a', 2, 3, True)
-        self.assertRaises(ValueError, s3_token._split_path, '/a/c/o/r', 3, 3)
-        self.assertRaises(ValueError, s3_token._split_path, '/a', 5, 4)
-
-    def test_split_path_success(self):
-        self.assertEqual(s3_token._split_path('/a'), ['a'])
-        self.assertEqual(s3_token._split_path('/a/'), ['a'])
-        self.assertEqual(s3_token._split_path('/a/c', 2), ['a', 'c'])
-        self.assertEqual(s3_token._split_path('/a/c/o', 3), ['a', 'c', 'o'])
-        self.assertEqual(s3_token._split_path('/a/c/o/r', 3, 3, True),
-                         ['a', 'c', 'o/r'])
-        self.assertEqual(s3_token._split_path('/a/c', 2, 3, True),
-                         ['a', 'c', None])
-        self.assertEqual(s3_token._split_path('/a/c/', 2), ['a', 'c'])
-        self.assertEqual(s3_token._split_path('/a/c/', 2, 3), ['a', 'c', ''])
-
-    def test_split_path_invalid_path(self):
-        try:
-            s3_token._split_path('o\nn e', 2)
-        except ValueError as err:
-            self.assertEqual(str(err), 'Invalid path: o%0An%20e')
-        try:
-            s3_token._split_path('o\nn e', 2, 3, True)
-        except ValueError as err:
-            self.assertEqual(str(err), 'Invalid path: o%0An%20e')

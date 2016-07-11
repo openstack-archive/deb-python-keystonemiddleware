@@ -14,7 +14,6 @@ import logging
 
 from keystoneauth1 import discover
 from keystoneauth1.identity import v2
-from keystoneauth1 import loading
 from keystoneauth1 import plugin
 from keystoneauth1 import token_endpoint
 from oslo_config import cfg
@@ -164,7 +163,6 @@ OPTS = [
                help='Protocol of the admin Identity API endpoint. '
                     'Deprecated, use identity_uri.'),
     cfg.StrOpt('identity_uri',
-               default=None,
                help='Complete admin Identity API endpoint. This '
                     'should specify the unversioned root endpoint '
                     'e.g. https://localhost:35357/'),
@@ -188,5 +186,4 @@ OPTS = [
 ]
 
 
-loading.register_auth_conf_options(cfg.CONF, _base.AUTHTOKEN_GROUP)
 cfg.CONF.register_opts(OPTS, group=_base.AUTHTOKEN_GROUP)

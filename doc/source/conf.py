@@ -17,6 +17,7 @@ from __future__ import unicode_literals
 import os
 import subprocess
 import sys
+import warnings
 
 import pbr.version
 
@@ -48,8 +49,12 @@ extensions = ['sphinx.ext.autodoc',
               # remove this Sphinx extension when
               # https://launchpad.net/bugs/1260495 is fixed.
               'ext.apidoc',
-              'oslosphinx'
+              'oslosphinx',
+              'oslo_config.sphinxconfiggen'
              ]
+
+config_generator_config_file = '../../config-generator/keystonemiddleware.conf'
+sample_config_basename = '_static/keystonemiddleware'
 
 todo_include_todos = True
 
@@ -155,14 +160,18 @@ man_pages = []
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-#html_static_path = ['static']
+html_static_path = ['_static']
 
 # If not '', a 'Last updated on:' timestamp is inserted at every page bottom,
 # using the given strftime format.
 git_cmd = ["git", "log", "--pretty=format:'%ad, commit %h'", "--date=local",
            "-n1"]
-html_last_updated_fmt = subprocess.Popen(
-    git_cmd, stdout=subprocess.PIPE).communicate()[0]
+try:
+    html_last_updated_fmt = subprocess.Popen(
+        git_cmd, stdout=subprocess.PIPE).communicate()[0]
+except Exception:
+    warnings.warn('Cannot get last updated time from git repository. '
+                  'Not setting "html_last_updated_fmt".')
 
 # If true, SmartyPants will be used to convert quotes and dashes to
 # typographically correct entities.

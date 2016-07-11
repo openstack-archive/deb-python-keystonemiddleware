@@ -56,26 +56,24 @@ class InvalidMacError(Exception):
     This usually indicates that data had been expectedly modified in memcache.
 
     """
+
     pass
 
 
 class DecryptError(Exception):
-    """raise when unable to decrypt encrypted data.
+    """raise when unable to decrypt encrypted data."""
 
-    """
     pass
 
 
 class CryptoUnavailableError(Exception):
-    """raise when Python Crypto module is not available.
+    """raise when Python Crypto module is not available."""
 
-    """
     pass
 
 
 def assert_crypto_availability(f):
     """Ensure Crypto module is available."""
-
     @functools.wraps(f)
     def wrapper(*args, **kwds):
         if AES is None:
@@ -88,7 +86,7 @@ if sys.version_info >= (3, 3):
     constant_time_compare = hmac.compare_digest
 else:
     def constant_time_compare(first, second):
-        """Returns True if both string inputs are equal, otherwise False.
+        """Return True if both string inputs are equal, otherwise False.
 
         This function should take a constant amount of time regardless of
         how many characters in the strings match.
@@ -107,7 +105,7 @@ else:
 
 
 def derive_keys(token, secret, strategy):
-    """Derives keys for MAC and ENCRYPTION from the user-provided secret.
+    """Derive keys for MAC and ENCRYPTION from the user-provided secret.
 
     The resulting keys should be passed to the protect and unprotect functions.
 

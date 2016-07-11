@@ -15,10 +15,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-"""
-Starting point for routing EC2 requests.
-
-"""
+"""Starting point for routing EC2 requests."""
 
 import hashlib
 import logging
@@ -206,7 +203,7 @@ class EC2Token(object):
 
 
 def filter_factory(global_conf, **local_conf):
-    """Returns a WSGI filter app for use with paste.deploy."""
+    """Return a WSGI filter app for use with paste.deploy."""
     conf = global_conf.copy()
     conf.update(local_conf)
 

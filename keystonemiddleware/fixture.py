@@ -51,7 +51,6 @@ class AuthTokenFixture(fixtures.Fixture):
                        project_domain_id=None, project_domain_name=None,
                        role_list=None, is_v2=False):
         """Add token data to the auth_token fixture."""
-
         if not token_id:
             token_id = uuid.uuid4().hex
 
@@ -72,7 +71,23 @@ class AuthTokenFixture(fixtures.Fixture):
                 project_domain_name=project_domain_name)
         for role in role_list:
             token.add_role(name=role)
-        self._token_data[token_id] = token
+        self.add_token(token, token_id=token_id)
+
+    @positional()
+    def add_token(self, token_data, token_id=None):
+        """Add an existing token to the middleware.
+
+        :param token_data: token data to add to the fixture
+        :type token_data: dict
+        :param token_id: the token ID to add this token as
+        :type token_id: str
+        :returns: The token_id that the token was added as.
+        :rtype: str
+        """
+        if not token_id:
+            token_id = uuid.uuid4().hex
+        self._token_data[token_id] = token_data
+        return token_id
 
     def fetch_token(self, token):
         """Low level replacement of fetch_token for AuthProtocol."""

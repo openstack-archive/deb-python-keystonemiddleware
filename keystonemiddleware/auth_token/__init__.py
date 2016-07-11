@@ -13,8 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Token-based Authentication Middleware
+r"""
+Token-based Authentication Middleware.
 
 This WSGI component:
 
@@ -118,6 +118,12 @@ HTTP_X_USER_DOMAIN_NAME, HTTP_X_SERVICE_USER_DOMAIN_NAME
 HTTP_X_ROLES, HTTP_X_SERVICE_ROLES
     Comma delimited list of case-sensitive role names.
 
+HTTP_X_IS_ADMIN_PROJECT
+    The string value 'True' or 'False' representing whether the user's token is
+    scoped to the admin project. As historically there was no admin project
+    this will default to True for tokens without this information to be
+    backwards with existing policy files.
+
 HTTP_X_SERVICE_CATALOG
     service catalog (optional, JSON string).
 
@@ -207,6 +213,7 @@ object is stored.
 """
 
 import binascii
+import copy
 import datetime
 import logging
 
@@ -218,17 +225,17 @@ from keystoneauth1 import loading
 from keystoneauth1.loading import session as session_loading
 from keystoneclient.common import cms
 from keystoneclient import exceptions as ksc_exceptions
-from oslo_config import cfg
 from oslo_serialization import jsonutils
-import pkg_resources
 import six
 import webob.dec
 
+from keystonemiddleware._common import config
 from keystonemiddleware.auth_token import _auth
 from keystonemiddleware.auth_token import _base
 from keystonemiddleware.auth_token import _cache
 from keystonemiddleware.auth_token import _exceptions as ksm_exceptions
 from keystonemiddleware.auth_token import _identity
+from keystonemiddleware.auth_token import _opts
 from keystonemiddleware.auth_token import _request
 from keystonemiddleware.auth_token import _revocations
 from keystonemiddleware.auth_token import _signing_dir
@@ -236,146 +243,38 @@ from keystonemiddleware.auth_token import _user_plugin
 from keystonemiddleware.i18n import _, _LC, _LE, _LI, _LW
 
 
-# NOTE(jamielennox): A number of options below are deprecated however are left
-# in the list and only mentioned as deprecated in the help string. This is
-# because we have to provide the same deprecation functionality for arguments
-# passed in via the conf in __init__ (from paste) and there is no way to test
-# that the default value was set or not in CONF.
-# Also if we were to remove the options from the CONF list (as typical CONF
-# deprecation works) then other projects will not be able to override the
-# options via CONF.
+_LOG = logging.getLogger(__name__)
+_CACHE_INVALID_INDICATOR = 'invalid'
 
-_OPTS = [
-    cfg.StrOpt('auth_uri',
-               default=None,
-               # FIXME(dolph): should be default='http://127.0.0.1:5000/v2.0/',
-               # or (depending on client support) an unversioned, publicly
-               # accessible identity endpoint (see bug 1207517)
-               help='Complete public Identity API endpoint.'),
-    cfg.StrOpt('auth_version',
-               default=None,
-               help='API version of the admin Identity API endpoint.'),
-    cfg.BoolOpt('delay_auth_decision',
-                default=False,
-                help='Do not handle authorization requests within the'
-                ' middleware, but delegate the authorization decision to'
-                ' downstream WSGI components.'),
-    cfg.IntOpt('http_connect_timeout',
-               default=None,
-               help='Request timeout value for communicating with Identity'
-               ' API server.'),
-    cfg.IntOpt('http_request_max_retries',
-               default=3,
-               help='How many times are we trying to reconnect when'
-               ' communicating with Identity API Server.'),
-    cfg.StrOpt('cache',
-               default=None,
-               help='Env key for the swift cache.'),
-    cfg.StrOpt('certfile',
-               help='Required if identity server requires client certificate'),
-    cfg.StrOpt('keyfile',
-               help='Required if identity server requires client certificate'),
-    cfg.StrOpt('cafile', default=None,
-               help='A PEM encoded Certificate Authority to use when '
-                    'verifying HTTPs connections. Defaults to system CAs.'),
-    cfg.BoolOpt('insecure', default=False, help='Verify HTTPS connections.'),
-    cfg.StrOpt('region_name', default=None,
-               help='The region in which the identity server can be found.'),
-    cfg.StrOpt('signing_dir',
-               help='Directory used to cache files related to PKI tokens.'),
-    cfg.ListOpt('memcached_servers',
-                deprecated_name='memcache_servers',
-                help='Optionally specify a list of memcached server(s) to'
-                ' use for caching. If left undefined, tokens will instead be'
-                ' cached in-process.'),
-    cfg.IntOpt('token_cache_time',
-               default=300,
-               help='In order to prevent excessive effort spent validating'
-               ' tokens, the middleware caches previously-seen tokens for a'
-               ' configurable duration (in seconds). Set to -1 to disable'
-               ' caching completely.'),
-    cfg.IntOpt('revocation_cache_time',
-               default=10,
-               help='Determines the frequency at which the list of revoked'
-               ' tokens is retrieved from the Identity service (in seconds). A'
-               ' high number of revocation events combined with a low cache'
-               ' duration may significantly reduce performance.'),
-    cfg.StrOpt('memcache_security_strategy',
-               default='None',
-               choices=('None', 'MAC', 'ENCRYPT'),
-               ignore_case=True,
-               help='(Optional) If defined, indicate whether token data'
-               ' should be authenticated or authenticated and encrypted.'
-               ' If MAC, token data is authenticated (with HMAC) in the cache.'
-               ' If ENCRYPT, token data is encrypted and authenticated in the'
-               ' cache. If the value is not one of these options or empty,'
-               ' auth_token will raise an exception on initialization.'),
-    cfg.StrOpt('memcache_secret_key',
-               default=None,
-               secret=True,
-               help='(Optional, mandatory if memcache_security_strategy is'
-               ' defined) This string is used for key derivation.'),
-    cfg.IntOpt('memcache_pool_dead_retry',
-               default=5 * 60,
-               help='(Optional) Number of seconds memcached server is'
-               ' considered dead before it is tried again.'),
-    cfg.IntOpt('memcache_pool_maxsize',
-               default=10,
-               help='(Optional) Maximum total number of open connections to'
-               ' every memcached server.'),
-    cfg.IntOpt('memcache_pool_socket_timeout',
-               default=3,
-               help='(Optional) Socket timeout in seconds for communicating '
-                    'with a memcached server.'),
-    cfg.IntOpt('memcache_pool_unused_timeout',
-               default=60,
-               help='(Optional) Number of seconds a connection to memcached'
-               ' is held unused in the pool before it is closed.'),
-    cfg.IntOpt('memcache_pool_conn_get_timeout',
-               default=10,
-               help='(Optional) Number of seconds that an operation will wait '
-                    'to get a memcached client connection from the pool.'),
-    cfg.BoolOpt('memcache_use_advanced_pool',
-                default=False,
-                help='(Optional) Use the advanced (eventlet safe) memcached '
-                     'client pool. The advanced pool will only work under '
-                     'python 2.x.'),
-    cfg.BoolOpt('include_service_catalog',
-                default=True,
-                help='(Optional) Indicate whether to set the X-Service-Catalog'
-                ' header. If False, middleware will not ask for service'
-                ' catalog on token validation and will not set the'
-                ' X-Service-Catalog header.'),
-    cfg.StrOpt('enforce_token_bind',
-               default='permissive',
-               help='Used to control the use and type of token binding. Can'
-               ' be set to: "disabled" to not check token binding.'
-               ' "permissive" (default) to validate binding information if the'
-               ' bind type is of a form known to the server and ignore it if'
-               ' not. "strict" like "permissive" but if the bind type is'
-               ' unknown the token will be rejected. "required" any form of'
-               ' token binding is needed to be allowed. Finally the name of a'
-               ' binding method that must be present in tokens.'),
-    cfg.BoolOpt('check_revocations_for_cached', default=False,
-                help='If true, the revocation list will be checked for cached'
-                ' tokens. This requires that PKI tokens are configured on the'
-                ' identity server.'),
-    cfg.ListOpt('hash_algorithms', default=['md5'],
-                help='Hash algorithms to use for hashing PKI tokens. This may'
-                ' be a single algorithm or multiple. The algorithms are those'
-                ' supported by Python standard hashlib.new(). The hashes will'
-                ' be tried in the order given, so put the preferred one first'
-                ' for performance. The result of the first hash will be stored'
-                ' in the cache. This will typically be set to multiple values'
-                ' only while migrating from a less secure algorithm to a more'
-                ' secure one. Once all the old tokens are expired this option'
-                ' should be set to a single value for better performance.'),
+
+AUTH_TOKEN_OPTS = [
+    (_base.AUTHTOKEN_GROUP,
+     _opts._OPTS + _auth.OPTS + loading.get_auth_common_conf_options())
 ]
 
-CONF = cfg.CONF
-CONF.register_opts(_OPTS, group=_base.AUTHTOKEN_GROUP)
 
-_LOG = logging.getLogger(__name__)
+def list_opts():
+    """Return a list of oslo_config options available in auth_token middleware.
+
+    The returned list includes all oslo_config options which may be registered
+    at runtime by the project.
+
+    Each element of the list is a tuple. The first element is the name of the
+    group under which the list of elements in the second element will be
+    registered. A group name of None corresponds to the [DEFAULT] group in
+    config files.
+
+    NOTE: This function is no longer used for oslo_config sample generation.
+    Some services rely on this function for listing ALL (including deprecated)
+    options and registering them into their own config objects which we do not
+    want for sample config files.
+
+    See: :py:func:`keystonemiddleware.auth_token._opts.list_opts` for sample
+    config files.
+
+    :returns: a list of (group_name, opts) tuples
+    """
+    return [(g, copy.deepcopy(o)) for g, o in AUTH_TOKEN_OPTS]
 
 
 class _BIND_MODE(object):
@@ -392,41 +291,6 @@ def _token_is_v2(token_info):
 
 def _token_is_v3(token_info):
     return ('token' in token_info)
-
-
-def _conf_values_type_convert(conf):
-    """Convert conf values into correct type."""
-    if not conf:
-        return {}
-
-    opt_types = {}
-    for o in _OPTS + _auth.OPTS:
-        type_dest = (getattr(o, 'type', str), o.dest)
-        opt_types[o.dest] = type_dest
-        # Also add the deprecated name with the same type and dest.
-        for d_o in o.deprecated_opts:
-            opt_types[d_o.name] = type_dest
-
-    opts = {}
-    for k, v in six.iteritems(conf):
-        dest = k
-        try:
-            if v is not None:
-                type_, dest = opt_types[k]
-                v = type_(v)
-        except KeyError:
-            # This option is not known to auth_token.
-            pass
-        except ValueError as e:
-            raise ksm_exceptions.ConfigurationError(
-                _('Unable to convert the value of %(key)s option into correct '
-                  'type: %(ex)s') % {'key': k, 'ex': e})
-        opts[dest] = v
-    return opts
-
-
-def _get_project_version(project):
-    return pkg_resources.get_distribution(project).version
 
 
 def _uncompress_pkiz(token):
@@ -491,7 +355,8 @@ class BaseAuthProtocol(object):
             try:
                 data, user_auth_ref = self._do_fetch_token(request.user_token)
                 self._validate_token(user_auth_ref)
-                self._confirm_token_bind(user_auth_ref, request)
+                if not request.service_token:
+                    self._confirm_token_bind(user_auth_ref, request)
             except ksm_exceptions.InvalidToken:
                 self.log.info(_LI('Invalid user token'))
                 request.user_token_valid = False
@@ -527,7 +392,7 @@ class BaseAuthProtocol(object):
             raise ksm_exceptions.InvalidToken(_('Token authorization failed'))
 
     def _do_fetch_token(self, token):
-        """Helper method to fetch a token and convert it into an AccessInfo"""
+        """Helper method to fetch a token and convert it into an AccessInfo."""
         data = self.fetch_token(token)
 
         try:
@@ -634,54 +499,26 @@ class AuthProtocol(BaseAuthProtocol):
         log = logging.getLogger(conf.get('log_name', __name__))
         log.info(_LI('Starting Keystone auth_token middleware'))
 
-        # NOTE(wanghong): If options are set in paste file, all the option
-        # values passed into conf are string type. So, we should convert the
-        # conf value into correct type.
-        self._conf = _conf_values_type_convert(conf)
-
-        # NOTE(sileht, cdent): If we don't want to use oslo.config global
-        # object there are two options: set "oslo_config_project" in
-        # paste.ini and the middleware will load the configuration with a
-        # local oslo.config object or the caller which instantiates
-        # AuthProtocol can pass in an existing oslo.config as the
-        # value of the "oslo_config_config" key in conf. If both are
-        # set "olso_config_config" is used.
-        self._local_oslo_config = conf.get('oslo_config_config')
-        if (not self._local_oslo_config) and ('oslo_config_project' in conf):
-            if 'oslo_config_file' in conf:
-                default_config_files = [conf['oslo_config_file']]
-            else:
-                default_config_files = None
-            self._local_oslo_config = cfg.ConfigOpts()
-            self._local_oslo_config(
-                [], project=conf['oslo_config_project'],
-                default_config_files=default_config_files,
-                validate_default_values=True)
-
-        if self._local_oslo_config:
-            self._local_oslo_config.register_opts(_OPTS,
-                                                  group=_base.AUTHTOKEN_GROUP)
-            self._local_oslo_config.register_opts(_auth.OPTS,
-                                                  group=_base.AUTHTOKEN_GROUP)
-
-            loading.register_auth_conf_options(self._local_oslo_config,
-                                               group=_base.AUTHTOKEN_GROUP)
+        self._conf = config.Config('auth_token',
+                                   _base.AUTHTOKEN_GROUP,
+                                   list_opts(),
+                                   conf)
 
         super(AuthProtocol, self).__init__(
             app,
             log=log,
-            enforce_token_bind=self._conf_get('enforce_token_bind'))
+            enforce_token_bind=self._conf.get('enforce_token_bind'))
 
         # delay_auth_decision means we still allow unauthenticated requests
         # through and we let the downstream service make the final decision
-        self._delay_auth_decision = self._conf_get('delay_auth_decision')
-        self._include_service_catalog = self._conf_get(
+        self._delay_auth_decision = self._conf.get('delay_auth_decision')
+        self._include_service_catalog = self._conf.get(
             'include_service_catalog')
-        self._hash_algorithms = self._conf_get('hash_algorithms')
+        self._hash_algorithms = self._conf.get('hash_algorithms')
 
         self._identity_server = self._create_identity_server()
 
-        self._auth_uri = self._conf_get('auth_uri')
+        self._auth_uri = self._conf.get('auth_uri')
         if not self._auth_uri:
             self.log.warning(
                 _LW('Configuring auth_uri to point to the public identity '
@@ -694,29 +531,20 @@ class AuthProtocol(BaseAuthProtocol):
             self._auth_uri = self._identity_server.auth_uri
 
         self._signing_directory = _signing_dir.SigningDirectory(
-            directory_name=self._conf_get('signing_dir'), log=self.log)
+            directory_name=self._conf.get('signing_dir'), log=self.log)
 
         self._token_cache = self._token_cache_factory()
 
         revocation_cache_timeout = datetime.timedelta(
-            seconds=self._conf_get('revocation_cache_time'))
+            seconds=self._conf.get('revocation_cache_time'))
         self._revocations = _revocations.Revocations(revocation_cache_timeout,
                                                      self._signing_directory,
                                                      self._identity_server,
                                                      self._cms_verify,
                                                      self.log)
 
-        self._check_revocations_for_cached = self._conf_get(
+        self._check_revocations_for_cached = self._conf.get(
             'check_revocations_for_cached')
-
-    def _conf_get(self, name, group=_base.AUTHTOKEN_GROUP):
-        # try config from paste-deploy first
-        if name in self._conf:
-            return self._conf[name]
-        elif self._local_oslo_config:
-            return self._local_oslo_config[group][name]
-        else:
-            return CONF[group][name]
 
     def process_request(self, request):
         """Process request.
@@ -750,9 +578,16 @@ class AuthProtocol(BaseAuthProtocol):
                 self.log.info(_LI('Deferring reject downstream'))
             else:
                 self.log.info(_LI('Rejecting request'))
+                message = 'The request you have made requires authentication.'
+                body = {'error': {
+                    'code': 401,
+                    'title': 'Unauthorized',
+                    'message': message,
+                }}
                 raise webob.exc.HTTPUnauthorized(
-                    body='Authentication required',
-                    headers=self._reject_auth_headers)
+                    body=jsonutils.dumps(body),
+                    headers=self._reject_auth_headers,
+                    content_type='application/json')
 
         if request.user_token_valid:
             user_auth_ref = request.token_auth._user_auth_ref
@@ -813,7 +648,6 @@ class AuthProtocol(BaseAuthProtocol):
 
         :returns: token data if found else None.
         """
-
         for token in token_hashes:
             cached = self._token_cache.get(token)
 
@@ -835,18 +669,29 @@ class AuthProtocol(BaseAuthProtocol):
             cached = self._cache_get_hashes(token_hashes)
 
             if cached:
-                data = cached
+                if cached == _CACHE_INVALID_INDICATOR:
+                    self.log.debug('Cached token is marked unauthorized')
+                    raise ksm_exceptions.InvalidToken()
 
                 if self._check_revocations_for_cached:
                     # A token might have been revoked, regardless of initial
                     # mechanism used to validate it, and needs to be checked.
                     self._revocations.check(token_hashes)
+
+                # NOTE(jamielennox): Cached values used to be stored as a tuple
+                # of data and expiry time. They no longer are but we have to
+                # allow some time to transition the old format so if it's a
+                # tuple just use the data.
+                if len(cached) == 2:
+                    cached = cached[0]
+
+                data = cached
             else:
                 data = self._validate_offline(token, token_hashes)
                 if not data:
                     data = self._identity_server.verify_token(token)
 
-                self._token_cache.store(token_hashes[0], data)
+                self._token_cache.set(token_hashes[0], data)
 
         except (ksa_exceptions.ConnectFailure,
                 ksa_exceptions.RequestTimeout,
@@ -857,7 +702,8 @@ class AuthProtocol(BaseAuthProtocol):
         except ksm_exceptions.InvalidToken:
             self.log.debug('Token validation failure.', exc_info=True)
             if token_hashes:
-                self._token_cache.store_invalid(token_hashes[0])
+                self._token_cache.set(token_hashes[0],
+                                      _CACHE_INVALID_INDICATOR)
             self.log.warning(_LW('Authorization failed for token'))
             raise
 
@@ -907,7 +753,7 @@ class AuthProtocol(BaseAuthProtocol):
             raise ksm_exceptions.InvalidToken(msg)
 
     def _cms_verify(self, data, inform=cms.PKI_ASN1_FORM):
-        """Verifies the signature of the provided data's IAW CMS syntax.
+        """Verify the signature of the provided data's IAW CMS syntax.
 
         If either of the certificate files might be missing, fetch them and
         retry.
@@ -956,30 +802,30 @@ class AuthProtocol(BaseAuthProtocol):
     def _get_auth_plugin(self):
         # NOTE(jamielennox): Ideally this would use load_from_conf_options
         # however that is not possible because we have to support the override
-        # pattern we use in _conf_get. This function therefore does a manual
+        # pattern we use in _conf.get. This function therefore does a manual
         # version of load_from_conf_options with the fallback plugin inline.
 
-        group = self._conf_get('auth_section') or _base.AUTHTOKEN_GROUP
+        group = self._conf.get('auth_section') or _base.AUTHTOKEN_GROUP
 
-        # NOTE(jamielennox): auth_plugin was deprecated to auth_type. _conf_get
+        # NOTE(jamielennox): auth_plugin was deprecated to auth_type. _conf.get
         # doesn't handle that deprecation in the case of conf dict options so
         # we have to manually check the value
-        plugin_name = (self._conf_get('auth_type', group=group)
-                       or self._conf.get('auth_plugin'))
+        plugin_name = (self._conf.get('auth_type', group=group)
+                       or self._conf.paste_overrides.get('auth_plugin'))
 
         if not plugin_name:
             return _auth.AuthTokenPlugin(
                 log=self.log,
-                auth_admin_prefix=self._conf_get('auth_admin_prefix',
+                auth_admin_prefix=self._conf.get('auth_admin_prefix',
                                                  group=group),
-                auth_host=self._conf_get('auth_host', group=group),
-                auth_port=self._conf_get('auth_port', group=group),
-                auth_protocol=self._conf_get('auth_protocol', group=group),
-                identity_uri=self._conf_get('identity_uri', group=group),
-                admin_token=self._conf_get('admin_token', group=group),
-                admin_user=self._conf_get('admin_user', group=group),
-                admin_password=self._conf_get('admin_password', group=group),
-                admin_tenant_name=self._conf_get('admin_tenant_name',
+                auth_host=self._conf.get('auth_host', group=group),
+                auth_port=self._conf.get('auth_port', group=group),
+                auth_protocol=self._conf.get('auth_protocol', group=group),
+                identity_uri=self._conf.get('identity_uri', group=group),
+                admin_token=self._conf.get('admin_token', group=group),
+                admin_user=self._conf.get('admin_user', group=group),
+                admin_password=self._conf.get('admin_password', group=group),
+                admin_tenant_name=self._conf.get('admin_tenant_name',
                                                  group=group)
             )
 
@@ -988,63 +834,22 @@ class AuthProtocol(BaseAuthProtocol):
         plugin_loader = loading.get_plugin_loader(plugin_name)
         plugin_opts = loading.get_auth_plugin_conf_options(plugin_loader)
 
-        (self._local_oslo_config or CONF).register_opts(plugin_opts,
-                                                        group=group)
-
-        getter = lambda opt: self._conf_get(opt.dest, group=group)
+        self._conf.oslo_conf_obj.register_opts(plugin_opts, group=group)
+        getter = lambda opt: self._conf.get(opt.dest, group=group)
         return plugin_loader.load_from_options_getter(getter)
-
-    def _determine_project(self):
-        """Determine a project name from all available config sources.
-
-        The sources are checked in the following order:
-
-          1. The paste-deploy config for auth_token middleware
-          2. The keystone_authtoken in the project's config
-          3. The oslo.config CONF.project property
-
-        """
-        try:
-            return self._conf_get('project')
-        except cfg.NoSuchOptError:
-            # Prefer local oslo config object
-            if self._local_oslo_config:
-                return self._local_oslo_config.project
-            try:
-                # CONF.project will exist only if the service uses
-                # oslo.config. It will only be set when the project
-                # calls CONF(...) and when not set oslo.config oddly
-                # raises a NoSuchOptError exception.
-                return CONF.project
-            except cfg.NoSuchOptError:
-                return ''
-
-    def _build_useragent_string(self):
-        project = self._determine_project()
-        if project:
-            project_version = _get_project_version(project)
-            project = '{project}/{project_version} '.format(
-                project=project,
-                project_version=project_version)
-
-        ua_template = ('{project}'
-                       'keystonemiddleware.auth_token/{ksm_version}')
-        return ua_template.format(
-            project=project,
-            ksm_version=_get_project_version('keystonemiddleware'))
 
     def _create_identity_server(self):
         # NOTE(jamielennox): Loading Session here should be exactly the
         # same as calling Session.load_from_conf_options(CONF, GROUP)
-        # however we can't do that because we have to use _conf_get to
+        # however we can't do that because we have to use _conf.get to
         # support the paste.ini options.
         sess = session_loading.Session().load_from_options(
-            cert=self._conf_get('certfile'),
-            key=self._conf_get('keyfile'),
-            cacert=self._conf_get('cafile'),
-            insecure=self._conf_get('insecure'),
-            timeout=self._conf_get('http_connect_timeout'),
-            user_agent=self._build_useragent_string()
+            cert=self._conf.get('certfile'),
+            key=self._conf.get('keyfile'),
+            cacert=self._conf.get('cafile'),
+            insecure=self._conf.get('insecure'),
+            timeout=self._conf.get('http_connect_timeout'),
+            user_agent=self._conf.user_agent,
         )
 
         auth_plugin = self._get_auth_plugin()
@@ -1054,10 +859,10 @@ class AuthProtocol(BaseAuthProtocol):
             auth=auth_plugin,
             service_type='identity',
             interface='admin',
-            region_name=self._conf_get('region_name'),
-            connect_retries=self._conf_get('http_request_max_retries'))
+            region_name=self._conf.get('region_name'),
+            connect_retries=self._conf.get('http_request_max_retries'))
 
-        auth_version = self._conf_get('auth_version')
+        auth_version = self._conf.get('auth_version')
         if auth_version is not None:
             auth_version = discover.normalize_version_number(auth_version)
         return _identity.IdentityServer(
@@ -1067,22 +872,22 @@ class AuthProtocol(BaseAuthProtocol):
             requested_auth_version=auth_version)
 
     def _token_cache_factory(self):
-        security_strategy = self._conf_get('memcache_security_strategy')
+        security_strategy = self._conf.get('memcache_security_strategy')
 
         cache_kwargs = dict(
-            cache_time=int(self._conf_get('token_cache_time')),
-            env_cache_name=self._conf_get('cache'),
-            memcached_servers=self._conf_get('memcached_servers'),
-            use_advanced_pool=self._conf_get('memcache_use_advanced_pool'),
-            dead_retry=self._conf_get('memcache_pool_dead_retry'),
-            maxsize=self._conf_get('memcache_pool_maxsize'),
-            unused_timeout=self._conf_get('memcache_pool_unused_timeout'),
-            conn_get_timeout=self._conf_get('memcache_pool_conn_get_timeout'),
-            socket_timeout=self._conf_get('memcache_pool_socket_timeout'),
+            cache_time=int(self._conf.get('token_cache_time')),
+            env_cache_name=self._conf.get('cache'),
+            memcached_servers=self._conf.get('memcached_servers'),
+            use_advanced_pool=self._conf.get('memcache_use_advanced_pool'),
+            dead_retry=self._conf.get('memcache_pool_dead_retry'),
+            maxsize=self._conf.get('memcache_pool_maxsize'),
+            unused_timeout=self._conf.get('memcache_pool_unused_timeout'),
+            conn_get_timeout=self._conf.get('memcache_pool_conn_get_timeout'),
+            socket_timeout=self._conf.get('memcache_pool_socket_timeout'),
         )
 
         if security_strategy.lower() != 'none':
-            secret_key = self._conf_get('memcache_secret_key')
+            secret_key = self._conf.get('memcache_secret_key')
             return _cache.SecureTokenCache(self.log,
                                            security_strategy,
                                            secret_key,
@@ -1092,7 +897,7 @@ class AuthProtocol(BaseAuthProtocol):
 
 
 def filter_factory(global_conf, **local_conf):
-    """Returns a WSGI filter app for use with paste.deploy."""
+    """Return a WSGI filter app for use with paste.deploy."""
     conf = global_conf.copy()
     conf.update(local_conf)
 

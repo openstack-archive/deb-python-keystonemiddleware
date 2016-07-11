@@ -13,6 +13,7 @@ Contents:
 
    middlewarearchitecture
    audit
+   installation
 
 Related Identity Projects
 =========================
@@ -43,7 +44,8 @@ using `Gerrit`_.
 .. _Launchpad: https://launchpad.net/keystonemiddleware
 .. _Gerrit: http://docs.openstack.org/infra/manual/developers.html#development-workflow
 
-Run tests with ``python setup.py test``.
+Run tests with ``tox -e py27`` if running with python 2.7. See the
+``tox.ini`` file for other test environment options.
 
 Indices and tables
 ==================

@@ -95,7 +95,7 @@ class _TokenData(object):
 
     @property
     def trust_id(self):
-        """Returns the trust id associated with the authentication request..
+        """Return the trust id associated with the authentication request..
 
         :rtype: str
         """
@@ -132,6 +132,14 @@ class _TokenData(object):
         :rtype: set(str)
         """
         return frozenset(self._stored_auth_ref.role_names or [])
+
+    @property
+    def is_admin_project(self):
+        """Return true if the current project scope is the admin project.
+
+        :rtype: bool
+        """
+        return self._stored_auth_ref.is_admin_project
 
     @property
     def _log_format(self):
