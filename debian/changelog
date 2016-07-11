@@ -1,6 +1,7 @@
 python-keystonemiddleware (4.4.1-0ubuntu1) xenial; urgency=medium
 
   * New upstream point release (LP: #1533724).
+  * d/gbp.conf: Update debian-branch to ubuntu/mitaka.
 
  -- Corey Bryant <corey.bryant@canonical.com>  Mon, 11 Jul 2016 09:07:04 -0400
 
