@@ -1,4 +1,4 @@
-python-keystonemiddleware (4.6.0-1) UNRELEASED; urgency=medium
+python-keystonemiddleware (4.8.0-1) UNRELEASED; urgency=medium
 
   [ Ondřej Nový ]
   * Standards-Version is 3.9.8 now (no change)
@@ -12,7 +12,7 @@ python-keystonemiddleware (4.6.0-1) UNRELEASED; urgency=medium
   * d/control: Align (Build-)Depends with upstream.
   * d/patches/*: Rebased.
 
- -- Corey Bryant <corey.bryant@canonical.com>  Mon, 11 Jul 2016 09:27:27 -0400
+ -- Corey Bryant <corey.bryant@canonical.com>  Tue, 16 Aug 2016 16:22:32 -0400
 
 python-keystonemiddleware (4.4.0-3) unstable; urgency=medium
 
