@@ -1,0 +1,10 @@
+Code-Review+2: Doug Hellmann <doug@doughellmann.com>
+Code-Review+2: Brant Knudson <bknudson@us.ibm.com>
+Code-Review+1: Clint Adams <clint@gcfm.net>
+Workflow+1: Brant Knudson <bknudson@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 24 Mar 2016 20:21:11 +0000
+Reviewed-on: https://review.openstack.org/297124
+Project: openstack/deb-python-keystonemiddleware
+Branch: refs/heads/stable/mitaka
