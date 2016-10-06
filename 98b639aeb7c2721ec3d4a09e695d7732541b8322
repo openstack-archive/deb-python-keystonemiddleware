@@ -1,0 +1,13 @@
+Code-Review+2: Steve Martinelli <s.martinelli@gmail.com>
+Code-Review+1: Boris Bobrov <bbobrov@mirantis.com>
+Code-Review+1: Rahul U Nair <rahulunair@gmail.com>
+Code-Review+1: Eric Brown <browne@vmware.com>
+Code-Review+1: Colleen Murphy <colleen@gazlene.net>
+Code-Review+1: Alexander Makarov <amakarov@mirantis.com>
+Workflow+1: Steve Martinelli <s.martinelli@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 05 Oct 2016 20:36:08 +0000
+Reviewed-on: https://review.openstack.org/336970
+Project: openstack/deb-python-keystonemiddleware
+Branch: refs/heads/master

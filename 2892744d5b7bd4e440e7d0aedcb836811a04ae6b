@@ -1,0 +1,10 @@
+Code-Review+1: Colleen Murphy <colleen@gazlene.net>
+Code-Review+2: Steve Martinelli <s.martinelli@gmail.com>
+Code-Review+2: Rodrigo Duarte <rodrigodsousa@gmail.com>
+Workflow+1: Rodrigo Duarte <rodrigodsousa@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 05 Oct 2016 18:34:00 +0000
+Reviewed-on: https://review.openstack.org/334295
+Project: openstack/deb-python-keystonemiddleware
+Branch: refs/heads/master
