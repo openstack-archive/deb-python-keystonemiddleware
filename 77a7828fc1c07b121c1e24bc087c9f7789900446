@@ -1,0 +1,11 @@
+Code-Review+2: Steve Martinelli <s.martinelli@gmail.com>
+Code-Review+1: Eric Brown <browne@vmware.com>
+Code-Review+1: Jeremy Liu <liujiong@gohighsec.com>
+Code-Review+2: David Stanek <dstanek@dstanek.com>
+Workflow+1: David Stanek <dstanek@dstanek.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 29 Nov 2016 14:10:28 +0000
+Reviewed-on: https://review.openstack.org/403987
+Project: openstack/deb-python-keystonemiddleware
+Branch: refs/heads/master
