@@ -1,0 +1,10 @@
+Code-Review+2: David Stanek <dstanek@dstanek.com>
+Code-Review+2: Lance Bragstad <lbragstad@gmail.com>
+Workflow+1: Lance Bragstad <lbragstad@gmail.com>
+Code-Review+1: Gage Hugo <gagehugo@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 15 Dec 2016 16:36:20 +0000
+Reviewed-on: https://review.openstack.org/411061
+Project: openstack/deb-python-keystonemiddleware
+Branch: refs/heads/master
