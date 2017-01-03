@@ -1,0 +1,9 @@
+Code-Review+2: Boris Bobrov <bbobrov@mirantis.com>
+Code-Review+2: Steve Martinelli <s.martinelli@gmail.com>
+Workflow+1: Steve Martinelli <s.martinelli@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sun, 01 Jan 2017 15:10:04 +0000
+Reviewed-on: https://review.openstack.org/415856
+Project: openstack/deb-python-keystonemiddleware
+Branch: refs/heads/master
