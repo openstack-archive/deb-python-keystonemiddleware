@@ -1,0 +1,10 @@
+Code-Review+2: Samuel de Medeiros Queiroz <samueldmq@gmail.com>
+Code-Review+1: Tin Lam <tin@irrational.io>
+Code-Review+2: Colleen Murphy <colleen@gazlene.net>
+Workflow+1: Colleen Murphy <colleen@gazlene.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 16 May 2017 04:38:04 +0000
+Reviewed-on: https://review.openstack.org/455927
+Project: openstack/deb-python-keystonemiddleware
+Branch: refs/heads/master
