@@ -1,0 +1,8 @@
+Code-Review+2: Samuel de Medeiros Queiroz <samueldmq@gmail.com>
+Workflow+1: Samuel de Medeiros Queiroz <samueldmq@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 27 May 2017 20:00:30 +0000
+Reviewed-on: https://review.openstack.org/468485
+Project: openstack/deb-python-keystonemiddleware
+Branch: refs/heads/master
