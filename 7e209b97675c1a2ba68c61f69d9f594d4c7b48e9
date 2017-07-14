@@ -1,0 +1,10 @@
+Code-Review+1: Colleen Murphy <colleen@gazlene.net>
+Code-Review+2: Samuel de Medeiros Queiroz <samueldmq@gmail.com>
+Code-Review+2: Lance Bragstad <lbragstad@gmail.com>
+Workflow+1: Lance Bragstad <lbragstad@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 14 Jul 2017 20:32:00 +0000
+Reviewed-on: https://review.openstack.org/439819
+Project: openstack/deb-python-keystonemiddleware
+Branch: refs/heads/master
